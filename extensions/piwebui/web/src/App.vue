@@ -44,7 +44,14 @@ onMounted(() => store.connect());
 			<span>{{ store.lastError }}</span>
 		</footer>
 
-		<Composer :running="store.running" :queue="store.queue" @prompt="store.sendPrompt($event)" @steer="store.steer($event)" @abort="store.abort()" />
+		<Composer
+			:running="store.running"
+			:queue-steering="store.queueSteering"
+			:queue-follow-up="store.queueFollowUp"
+			@prompt="store.sendPrompt($event)"
+			@steer="store.steer($event)"
+			@abort="store.abort()"
+		/>
 
 		<ApprovalDialog
 			:requests="store.pendingUi"

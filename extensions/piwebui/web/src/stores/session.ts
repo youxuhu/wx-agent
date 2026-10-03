@@ -37,7 +37,8 @@ export const useSessionStore = defineStore("session", {
 		lastError: "" as string,
 		stderr: [] as string[],
 		usage: null as null | { input: number; output: number; totalTokens: number; cost: number },
-		queue: 0,
+		queueSteering: 0,
+		queueFollowUp: 0,
 		retry: null as null | { attempt: number; max: number; reason: string },
 	}),
 
@@ -193,9 +194,12 @@ export const useSessionStore = defineStore("session", {
 					}
 					return;
 				}
-				case "queue_update":
-					this.queue = Array.isArray(record.queue) ? (record.queue as unknown[]).length : Number(record.size ?? 0);
+				case "queue_update": {
+					// pi reports the complete current queues under `steering` and `followUp`.
+					this.queueSteering = Array.isArray(record.steering) ? (record.steering as unknown[]).length : 0;
+					this.queueFollowUp = Array.isArray(record.followUp) ? (record.followUp as unknown[]).length : 0;
 					return;
+				}
 				case "auto_retry_start":
 					this.retry = { attempt: Number(record.attempt ?? 0), max: Number(record.maxAttempts ?? 0), reason: String(record.errorMessage ?? "") };
 					return;
