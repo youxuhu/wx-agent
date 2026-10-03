@@ -17,14 +17,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
 	DoctorReport,
+	FrontAppInfo,
 	PlatformAdapter,
 	PlatformCapabilities,
 	Point,
 	ScreenshotResult,
 	WindowInfo,
 } from "../platform";
+import { mergeRawAx, type RawAxNode } from "../gate";
 
 const SWIFT_TIMEOUT_MS = 3_000;
+const AX_TIMEOUT_MS = 2_000; // PLAN §3: AX snippet hard timeout
 
 const DOCTOR_SWIFT = `
 import Foundation
@@ -43,14 +46,20 @@ let d = try! JSONSerialization.data(withJSONObject: result)
 print(String(data: d, encoding: .utf8)!)
 `;
 
+/**
+ * B3 (PLAN §2.3): one-shot probe returning the front application (frontmostApplication —
+ * authoritative) plus the layer-0 on-screen window list. isFocused is decided by the
+ * CALLER from pid === frontPid; the Swift side no longer uses CGWindowList order heuristics.
+ */
 const WINDOWS_SWIFT = `
 import Foundation
 import AppKit
 let front = NSWorkspace.shared.frontmostApplication
 let frontPid = front?.processIdentifier ?? -1
+let frontApp = front?.localizedName ?? ""
+let frontBundleId = front?.bundleIdentifier ?? ""
 let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
 let list = (CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]) ?? []
-  var first = true
   var out: [[String: Any]] = []
   for w in list {
     guard (w[kCGWindowLayer as String] as? Int) == 0 else { continue }
@@ -60,21 +69,145 @@ let list = (CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]
     let owner = w[kCGWindowOwnerName as String] as? String ?? ""
     let title = w[kCGWindowName as String] as? String ?? ""
     let pid = w[kCGWindowOwnerPID as String] as? Int ?? -1
-    // CGWindowList is ordered front-to-back; the first layer-0 window is the
-    // focused one. frontmostApplication's pid alone is unreliable from spawned
-    // background processes (may point at an app with no on-screen window).
     out.append([
-      "title": title, "appName": owner, "isFocused": first || pid == frontPid,
+      "pid": pid, "title": title, "appName": owner,
       "x": Double(x), "y": Double(y), "width": Double(wd), "height": Double(ht),
     ])
-    first = false
   }
-let d = try! JSONSerialization.data(withJSONObject: out)
+let result: [String: Any] = [
+  "frontPid": frontPid, "frontApp": frontApp, "frontBundleId": frontBundleId, "windows": out,
+]
+let d = try! JSONSerialization.data(withJSONObject: result)
 print(String(data: d, encoding: .utf8)!)
 `;
 
-function runSwift(script: string, timeoutMs = SWIFT_TIMEOUT_MS): string {
-	const r = spawnSync("swift", ["-"], { input: script, encoding: "utf8", timeout: timeoutMs });
+interface WindowsProbe {
+	frontPid: number;
+	frontApp: string;
+	frontBundleId: string;
+	windows: Array<{ pid: number; title: string; appName: string; x: number; y: number; width: number; height: number }>;
+}
+
+/**
+ * §3: AX widget-tree dump. Reads the target pid embedded at template time
+ * (omitted pid → frontmost app). Depth <=12 / nodes <=400 enforced here;
+ * the caller additionally enforces the 2s spawnSync timeout.
+ */
+const AX_SWIFT = (pid: number) => `
+import Foundation
+import AppKit
+import ApplicationServices
+let MAX_DEPTH = 12
+let MAX_NODES = 400
+let targetPid: pid_t = ${Number.isInteger(pid) && pid > 0 ? pid : "NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1"}
+var nodeCount = 0
+func axString(_ el: AXUIElement, _ attr: String) -> String {
+  var v: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let s = v as? String else { return "" }
+  return s
+}
+func axBool(_ el: AXUIElement, _ attr: String) -> Bool {
+  var v: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let b = v as? Bool else { return false }
+  return b
+}
+func axGeom(_ el: AXUIElement, _ attr: String) -> [String: Double]? {
+  var v: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, v != nil, CFGetTypeID(v!) == AXValueGetTypeID() else { return nil }
+  let av = v! as! AXValue
+  let t = AXValueGetType(av)
+  if t == .cgPoint {
+    var p = CGPoint.zero
+    guard AXValueGetValue(av, .cgPoint, &p) else { return nil }
+    return ["x": Double(p.x), "y": Double(p.y)]
+  }
+  if t == .cgSize {
+    var s = CGSize.zero
+    guard AXValueGetValue(av, .cgSize, &s) else { return nil }
+    return ["w": Double(s.width), "h": Double(s.height)]
+  }
+  return nil
+}
+func walk(_ el: AXUIElement, _ depth: Int) -> [String: Any]? {
+  if depth > MAX_DEPTH || nodeCount >= MAX_NODES { return nil }
+  nodeCount += 1
+  let role = axString(el, kAXRoleAttribute as String)
+  let title = axString(el, kAXTitleAttribute as String)
+  var value = axString(el, kAXValueAttribute as String)
+  if value.count > 80 { value = String(value.prefix(80)) }
+  let pos = axGeom(el, kAXPositionAttribute as String)
+  let size = axGeom(el, kAXSizeAttribute as String)
+  let focused = axBool(el, kAXFocusedAttribute as String)
+  var children: [[String: Any]] = []
+  if depth < MAX_DEPTH, nodeCount < MAX_NODES {
+    var v: CFTypeRef?
+    if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &v) == .success,
+       let arr = v as? [AXUIElement] {
+      for c in arr {
+        if let n = walk(c, depth + 1) { children.append(n) }
+        if nodeCount >= MAX_NODES { break }
+      }
+    }
+  }
+  var d: [String: Any] = ["role": role, "title": title, "value": value, "focused": focused]
+  if let p = pos { d["x"] = p["x"] ?? 0; d["y"] = p["y"] ?? 0 }
+  if let s = size { d["w"] = s["w"] ?? 0; d["h"] = s["h"] ?? 0 }
+  if !children.isEmpty { d["children"] = children }
+  return d
+}
+let app = AXUIElementCreateApplication(targetPid)
+var root: [String: Any] = [:]
+if let tree = walk(app, 0) { root = tree }
+let result: [String: Any] = ["ok": nodeCount > 0, "pid": targetPid, "nodes": nodeCount, "tree": root]
+let d = try! JSONSerialization.data(withJSONObject: result)
+print(String(data: d, encoding: .utf8)!)
+`;
+
+interface RawAxNode {
+	role: string;
+	title: string;
+	value: string;
+	focused: boolean;
+	x?: number;
+	y?: number;
+	w?: number;
+	h?: number;
+	children?: RawAxNode[];
+}
+
+/**
+ * B2/B4 (PLAN §2.2/§2.4): activate by pid (NSRunningApplication) → open -b → open -a.
+ * The target (name or bundleId) is passed via the CUA_TARGET env var; the Swift side
+ * resolves it against NSWorkspace.runningApplications and activates by pid.
+ */
+const ACTIVATE_SWIFT = `
+import Foundation
+import AppKit
+let target = ProcessInfo.processInfo.environment["CUA_TARGET"] ?? ""
+var best: NSRunningApplication? = nil
+if !target.isEmpty {
+  for a in NSWorkspace.shared.runningApplications {
+    guard a.activationPolicy == .regular else { continue }
+    if a.bundleIdentifier == target || a.localizedName == target { best = a; break }
+  }
+}
+var ok = false
+var pid = -1
+var appName = ""
+var bundleId = ""
+if let a = best {
+  ok = a.activate(options: [])
+  pid = a.processIdentifier
+  appName = a.localizedName ?? ""
+  bundleId = a.bundleIdentifier ?? ""
+}
+let result: [String: Any] = ["ok": ok, "pid": pid, "appName": appName, "bundleId": bundleId]
+let d = try! JSONSerialization.data(withJSONObject: result)
+print(String(data: d, encoding: .utf8)!)
+`;
+
+function runSwift(script: string, timeoutMs = SWIFT_TIMEOUT_MS, env?: NodeJS.ProcessEnv): string {
+	const r = spawnSync("swift", ["-"], { input: script, encoding: "utf8", timeout: timeoutMs, env: env ? { ...process.env, ...env } : undefined });
 	if (r.error) throw new Error(`swift failed to run: ${r.error.message}`);
 	if (r.status !== 0) {
 		throw new Error(`swift exited ${r.status}: ${(r.stderr || r.stdout || "").trim().slice(0, 200)}`);
@@ -82,8 +215,8 @@ function runSwift(script: string, timeoutMs = SWIFT_TIMEOUT_MS): string {
 	return r.stdout;
 }
 
-function runSwiftJSON<T>(script: string, timeoutMs = SWIFT_TIMEOUT_MS): T {
-	const out = runSwift(script, timeoutMs).trim();
+function runSwiftJSON<T>(script: string, timeoutMs = SWIFT_TIMEOUT_MS, env?: NodeJS.ProcessEnv): T {
+	const out = runSwift(script, timeoutMs, env).trim();
 	const line = out.split("\n").pop() ?? "";
 	return JSON.parse(line) as T;
 }
@@ -126,15 +259,23 @@ function mapKey(name: string): import("@nut-tree-fork/nut-js").Key | null {
 		up: "Up", down: "Down", left: "Left", right: "Right",
 	};
 	const direct = named[n] ?? (/^f([1-9]|1[0-2])$/.exec(n) ? `F${n.slice(1)}` : null);
-	const member = direct ?? (/^[a-z]$/.test(n) ? n.toUpperCase() : /^[0-9]$/.test(n) ? `Num${n}` : null);
+	const member = direct ?? PUNCT[n] ?? (/^[a-z]$/.test(n) ? n.toUpperCase() : /^[0-9]$/.test(n) ? `Num${n}` : null);
 	if (!member) return null;
 	const value = (K as unknown as Record<string, unknown>)[member];
 	return typeof value === "number" ? (value as unknown as import("@nut-tree-fork/nut-js").Key) : null;
 }
 
+/** ASCII printable single characters mappable to nut.js Key enum members (B1 extension). */
+const PUNCT: Record<string, string> = {
+	".": "Period", ",": "Comma", "/": "Slash", ";": "Semicolon", "'": "Quote",
+	"-": "Minus", "=": "Equal", "[": "LeftBracket", "]": "RightBracket",
+	"\\": "Backslash", "`": "Grave",
+};
+
 export function createAdapter(): PlatformAdapter {
 	let lastRaster: { width: number; height: number } = { width: 0, height: 0 };
 	let lastLogical: { width: number; height: number } = { width: 0, height: 0 };
+	let frontCache: { at: number; value: WindowsProbe } | null = null;
 
 	/**
 	 * Screenshot pipeline (PLAN §3.1/§3.3): capture PNG, scale to width ≤ 1280,
@@ -154,7 +295,16 @@ export function createAdapter(): PlatformAdapter {
 		}
 		const dir = mkdtempSync(join(tmpdir(), "cua-shot-"));
 		try {
-			const file = await m.screen.capture("shot", m.FileType.PNG, dir);
+			let file: string;
+			try {
+				file = await m.screen.capture("shot", m.FileType.PNG, dir);
+			} catch {
+				// macOS 15+ obsoleted CGDisplayCreateImage, which libnut uses — fall back to
+				// the system screencapture(1) CLI (same Screen Recording permission).
+				file = join(dir, "shot.png");
+				const cap = spawnSync("screencapture", ["-x", "-t", "png", file], { timeout: SWIFT_TIMEOUT_MS });
+				if (cap.status !== 0) throw new Error(`screenshot failed: nut.capture + screencapture both unavailable`);
+			}
 			const { default: Jimp } = await import("jimp");
 			const img = await Jimp.read(file);
 			const rawW = img.bitmap.width;
@@ -177,13 +327,22 @@ export function createAdapter(): PlatformAdapter {
 		platform: "darwin",
 		screenshot: true,
 		mouseKeyboard: true,
-		a11y: false, // Phase 2 (Swift AX snippet)
+		a11y: true, // §3 Swift AX widget tree (logical screen coordinates)
 		clipboard: true,
-		notes: ["a11y widget tree lands in Phase 2; observations are screenshot + window list for now"],
+		notes: [],
 	};
 
 	return {
 		capabilities,
+
+		/** Cached (500ms) WINDOWS_SWIFT probe — avoids re-spawning swift between listWindows + frontmostApp. */
+		async frontProbe(): Promise<WindowsProbe> {
+			const now = Date.now();
+			if (frontCache && now - frontCache.at < 500) return frontCache.value;
+			const value = runSwiftJSON<WindowsProbe>(WINDOWS_SWIFT);
+			frontCache = { at: now, value };
+			return value;
+		},
 
 		async screenSize() {
 			return { raster: { ...lastRaster }, logical: { ...lastLogical } };
@@ -194,18 +353,65 @@ export function createAdapter(): PlatformAdapter {
 		},
 
 		async listWindows(): Promise<WindowInfo[]> {
-			const rows = runSwiftJSON<Array<Record<string, unknown>>>(WINDOWS_SWIFT);
-			return rows.map((r) => ({
-				title: String(r.title ?? ""),
-				appName: String(r.appName ?? ""),
-				bounds: {
-					x: Number(r.x ?? 0),
-					y: Number(r.y ?? 0),
-					width: Number(r.width ?? 0),
-					height: Number(r.height ?? 0),
-				},
-				isFocused: Boolean(r.isFocused),
+			const probe = await this.frontProbe();
+			return probe.windows.map((r) => ({
+				pid: r.pid,
+				title: r.title,
+				appName: r.appName,
+				bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+				// B3 (PLAN §2.3): focus is decided ONLY by pid === frontPid.
+				isFocused: r.pid === probe.frontPid,
 			}));
+		},
+
+		async frontmostApp(): Promise<FrontAppInfo | null> {
+			const probe = await this.frontProbe();
+			if (probe.frontPid < 0 && !probe.frontApp) return null;
+			return { pid: probe.frontPid, appName: probe.frontApp, bundleId: probe.frontBundleId };
+		},
+
+		/**
+		 * B2/B4 (PLAN §2.2/§2.4): activate an app by name or bundleId.
+		 * Order: NSRunningApplication(pid).activate() → open -b <bundleId> → open -a <name>.
+		 */
+		async activateApp(target: string): Promise<void> {
+			const t = target.trim();
+			if (!t) throw new Error("activateApp: empty target");
+			try {
+				const r = runSwiftJSON<{ ok: boolean; pid: number }>(ACTIVATE_SWIFT, SWIFT_TIMEOUT_MS, { CUA_TARGET: t });
+				if (r.ok) return;
+			} catch {
+				/* fall through to open(1) fallbacks */
+			}
+			const tryOpen = (args: string[]): boolean => {
+				const r = spawnSync("open", args, { timeout: SWIFT_TIMEOUT_MS });
+				return r.status === 0;
+			};
+			if (t.includes(".") && tryOpen(["-b", t])) return;
+			if (tryOpen(["-a", t])) return;
+			if (!t.includes(".") && tryOpen(["-b", t])) return;
+			throw new Error(`activateApp: could not activate '${t}'`);
+		},
+
+		/** §3: Swift AX dump → raw JSON tree (logical screen coordinates). */
+		async a11yTree(): Promise<import("../gate").WidgetNode | null> {
+			let pid = -1;
+			try {
+				const front = await this.frontmostApp();
+				pid = front?.pid ?? -1;
+			} catch {
+				/* frontmost probe failed — let Swift resolve the front app itself */
+			}
+			const script = AX_SWIFT(pid > 0 ? pid : 0);
+			const r = spawnSync("swift", ["-"], { input: script, encoding: "utf8", timeout: AX_TIMEOUT_MS });
+			if (r.error || r.status !== 0) return null; // AX unavailable/slow → caller degrades the level
+			try {
+				const parsed = JSON.parse((r.stdout || "").trim().split("\n").pop() ?? "") as { ok: boolean; tree: RawAxNode };
+				if (!parsed.ok || !parsed.tree) return null;
+				return mergeRawAx(parsed.tree);
+			} catch {
+				return null;
+			}
 		},
 
 		async moveAndClick(p: Point, button: "left" | "right", double?: boolean): Promise<void> {
@@ -216,9 +422,30 @@ export function createAdapter(): PlatformAdapter {
 			else await m.mouse.click(btn);
 		},
 
+/**
+ * B1 (PLAN §2.1): per-character pressKey typing. nut.js keyboard.type silently drops
+ * text in this environment; pressKey is the verified path. Newline → Return;
+ * mappable ASCII → pressKey (uppercase via Shift+twin); unmappable chars (CJK/emoji)
+ * fall back to keyboard.type for that single character.
+ */
 		async typeText(t: string): Promise<void> {
 			const m = await nut();
-			await m.keyboard.type(t);
+			for (const ch of t) {
+				if (ch === "\n") {
+					await m.keyboard.pressKey(m.Key.Return);
+					continue;
+				}
+				if (/[A-Z]/.test(ch)) {
+					const k = mapKey(ch.toLowerCase());
+					if (typeof k === "number") {
+						await m.keyboard.pressKey(m.Key.LeftShift, k as import("@nut-tree-fork/nut-js").Key);
+						continue;
+					}
+				}
+				const k = mapKey(ch);
+				if (typeof k === "number") await m.keyboard.pressKey(k as import("@nut-tree-fork/nut-js").Key);
+				else await m.keyboard.type(ch); // unmappable (CJK/emoji etc.) — single-char fallback
+			}
 		},
 
 		async pressKey(combo: string): Promise<void> {

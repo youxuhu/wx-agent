@@ -9,15 +9,38 @@
 
 import type { BlockInfo, WindowInfo } from "./platform";
 
+export type ObservationLevel = "full" | "tree" | "minimal"; // PLAN §1.1
+
 export interface WidgetNode {
 	index: number; // depth-first, 1-based, tree-wide
 	role: string;
 	label: string; // visible text/title, truncated to 80 chars
 	value?: string;
-	center: { x: number; y: number }; // screenshot raster coordinate space
+	center: { x: number; y: number }; // LOGICAL screen coordinates (v3.1 §3)
 	clickable: boolean;
+	focused: boolean;
 	children: WidgetNode[];
 }
+
+/** Raw AX node JSON emitted by the darwin Swift snippet (darwin.ts AX_SWIFT). */
+export interface RawAxNode {
+	role: string;
+	title: string;
+	value: string;
+	focused: boolean;
+	x?: number;
+	y?: number;
+	w?: number;
+	h?: number;
+	children?: RawAxNode[];
+}
+
+/** AX roles considered actionable (PLAN v2 §5.4 clickable whitelist). */
+const CLICKABLE_ROLES: ReadonlySet<string> = new Set([
+	"AXButton", "AXLink", "AXMenuItem", "AXMenuBarItem", "AXCheckBox", "AXRadioButton",
+	"AXPopUpButton", "AXTabGroup", "AXTab", "AXSlider", "AXTextArea", "AXTextField",
+	"AXComboBox", "AXSearchField", "AXDisclosureTriangle", "AXIncrementor",
+]);
 
 /**
  * dHash 8x8 (PLAN §2): box-average the RGBA raster down to a 9x8 grayscale grid,
@@ -69,13 +92,114 @@ export function buildWidgetIndex(root: WidgetNode | null | undefined): Map<numbe
 }
 
 /**
- * TODO(Phase 2): mergeTree() — merge the backend AxxNode JSON (Swift AX / pyatspi / UIA)
- * into a WidgetNode tree per PLAN §5.4 (depth-first indices, bounds->center conversion into
- * the screenshot raster space, clickable role set, 80-char label truncation, staticText pruning
- * down to <=400 nodes, window-bounds realignment). Stub returns null until a11y lands.
+ * mergeRawAx (PLAN §3 + v2 §5.4): convert the Swift AX dump into the WidgetNode tree.
+ * Depth-first 1-based indices, clickable whitelist, 80-char label truncation, pruning down
+ * to <=400 nodes. Coordinates stay in the LOGICAL screen space (§3 coordSpace="logical").
  */
-export function mergeTree(): WidgetNode | null {
-	return null;
+export function mergeRawAx(raw: RawAxNode, maxNodes = 400): WidgetNode | null {
+	let index = 0;
+	const walk = (n: RawAxNode, depth: number): WidgetNode | null => {
+		if (depth > 12 || index >= maxNodes) return null;
+		const hasGeom = typeof n.x === "number" && typeof n.y === "number";
+		const clickable = CLICKABLE_ROLES.has(n.role);
+		const label = (n.title || n.value || "").slice(0, 80);
+		const kids = n.children ?? [];
+		// Prune unlabeled, geometry-less, non-clickable leaves and single-child passthrough wrappers.
+		if (!clickable && !hasGeom && kids.length === 0) return null;
+		if (!clickable && !hasGeom && !label && kids.length === 1) return walk(kids[0], depth);
+		index += 1;
+		const node: WidgetNode = {
+			index,
+			role: n.role.replace(/^AX/, "") || "unknown",
+			label,
+			value: n.value && n.value !== label ? n.value.slice(0, 80) : undefined,
+			center: {
+				x: Math.round((n.x ?? 0) + (n.w ?? 0) / 2),
+				y: Math.round((n.y ?? 0) + (n.h ?? 0) / 2),
+			},
+			clickable,
+			focused: Boolean(n.focused),
+			children: [],
+		};
+		for (const c of kids) {
+			if (index >= maxNodes) break;
+			const child = walk(c, depth + 1);
+			if (child) node.children.push(child);
+		}
+		return node;
+	};
+	return walk(raw, 0);
+}
+
+/**
+ * treeFingerprint (PLAN §1.3): node count + first 16 (role,label,bounds) triples hashed
+ * (djb2) to 16 hex chars. Compare via treeChangedFraction(); >30% change ⇒ page-level jump.
+ */
+export function treeFingerprint(root: WidgetNode | null | undefined): string {
+	const s = treeSample(root).joined;
+	if (s === "") return "";
+	let h = 5381;
+	for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+	return h.toString(16).padStart(8, "0").repeat(2);
+}
+
+/** node count + first-16 (role,label,bounds) sample used by treeFingerprint / treeChangedFraction. */
+export function treeSample(root: WidgetNode | null | undefined): { count: number; sample: string[]; joined: string } {
+	if (!root) return { count: 0, sample: [], joined: "" };
+	let count = 0;
+	const sample: string[] = [];
+	const walk = (n: WidgetNode): void => {
+		count += 1;
+		if (count <= 16) sample.push(`${n.role}|${n.label}|${n.center.x},${n.center.y}`);
+		n.children.forEach(walk);
+	};
+	walk(root);
+	return { count, sample, joined: `${count}:${sample.join(";")}` };
+}
+
+/**
+ * Fraction of the first-16 sampled widget identities that differ between two tree samples.
+ * Large node-count deltas also count as a full (page-level) change.
+ */
+export function treeChangedFraction(prev: { count: number; sample: string[] }, next: { count: number; sample: string[] }): number {
+	if (prev.count === 0 && next.count === 0) return 0;
+	const a = prev.sample;
+	const b = next.sample;
+	const n = Math.max(a.length, b.length, 1);
+	let diff = 0;
+	for (let i = 0; i < n; i++) if (a[i] !== b[i]) diff += 1;
+	if (Math.abs(prev.count - next.count) > Math.max(8, next.count * 0.3)) return 1;
+	return diff / n;
+}
+
+/**
+ * decideLevel (PLAN §1.2): deterministic screenshot-trigger policy. Evaluated after the
+ * widget tree is captured (the fingerprint needs it) but before any screenshot is taken —
+ * only full-level observations carry an image.
+ */
+export function decideLevel(input: {
+	action: string;
+	firstOfTask: boolean;
+	actionsSinceFull: number;
+	focusChanged: boolean; // frontPid changed since the previous observation (B3 pid check)
+	prevBlocked: boolean; // previous observation reported a blocked condition
+	treeChanged: number; // treeChangedFraction() result
+	hadPrevTree: boolean;
+	repeat: boolean; // same (action,target) executed within 3s
+	a11yAvailable: boolean;
+}): { level: ObservationLevel; reason: string } {
+	const i = input;
+	if (i.action === "screenshot" || i.action === "activate") {
+		return { level: "full", reason: i.action === "activate" ? "activate ⇒ full (PLAN §1.2)" : "explicit screenshot request" };
+	}
+	if (i.firstOfTask) return { level: "full", reason: "first observation of the task" };
+	if (i.focusChanged) return { level: "full", reason: "focus-change ⇒ full" };
+	if (i.prevBlocked) return { level: "full", reason: "blocked hit ⇒ full" };
+	if (i.actionsSinceFull >= 10) return { level: "full", reason: "heartbeat: ≥10 actions since last full" };
+	if (i.hadPrevTree && i.treeChanged > 0.3) return { level: "full", reason: `tree fingerprint changed ${(i.treeChanged * 100).toFixed(0)}% (>30%) ⇒ page jump` };
+	if (!i.a11yAvailable) return { level: "minimal", reason: "no a11y backend ⇒ degraded to minimal (PLAN §3)" };
+	if (i.repeat) return { level: "minimal", reason: "same (action,target) within 3s ⇒ minimal" };
+	return { level: "tree", reason: "default" };
 }
 
 export interface BlockInfo {
@@ -85,15 +209,20 @@ export interface BlockInfo {
 }
 
 export interface Observation {
+	level: ObservationLevel; // v3.1 §1.1
+	coordSpace: "raster" | "logical"; // full ⇒ raster (screenshot), tree ⇒ logical (v3.1 §3)
 	screenshot?: {
 		base64: string;
 		width: number;
 		height: number; // raster actual size (authoritative coordinate reference)
 	};
-	widgetTree?: WidgetNode; // Phase 2 onwards
+	widgetTree?: WidgetNode; // v3.1 §3: Swift AX (logical coords)
+	treeFingerprint?: string; // v3.1 §1.3: 16-hex tree fingerprint ("(tree)" hash)
+	treeNodeCount?: number;
 	windows: WindowInfo[];
 	blocked: BlockInfo | null;
-	stateHash: string; // 16-hex dHash 8x8 grayscale of the screenshot
+	stateHash: string; // 16-hex dHash of the screenshot; tree fingerprint when no screenshot
+	frontApp?: { appName: string; bundleId: string } | null; // B3 front application
 }
 
 /** Detects blocked conditions per PLAN §5.5 (deterministic, no model involvement). */

@@ -15,10 +15,18 @@ export interface Rect {
 }
 
 export interface WindowInfo {
+	pid: number; // owning process id
 	title: string;
 	appName: string; // owning application
 	bounds: Rect; // global screen (logical) coordinates
-	isFocused: boolean;
+	isFocused: boolean; // v3.1 (PLAN §2.3): true iff pid === frontPid
+}
+
+/** Front application snapshot from the B3 cross-check Swift probe (PLAN §2.3). */
+export interface FrontAppInfo {
+	pid: number;
+	appName: string;
+	bundleId: string;
 }
 
 export interface PlatformCapabilities {
@@ -55,6 +63,10 @@ export interface ScreenshotResult {
  */
 export interface PlatformAdapter {
 	readonly capabilities: PlatformCapabilities;
+	/** B3 (PLAN §2.3): front application cross-check (frontPid/frontApp/frontBundleId). */
+	frontmostApp(): Promise<FrontAppInfo | null>;
+	/** B2/B4 (PLAN §2.2/§2.4): activate an app to the foreground (name or bundleId). */
+	activateApp(target: string): Promise<void>;
 	/** Main display raster size of the last/current capture and logical size, for Retina conversion. */
 	screenSize(): Promise<{ raster: { width: number; height: number }; logical: { width: number; height: number } }>;
 	screenshot(): Promise<ScreenshotResult>;
@@ -63,7 +75,7 @@ export interface PlatformAdapter {
 	typeText(t: string): Promise<void>;
 	pressKey(combo: string): Promise<void>;
 	scroll(d: "up" | "down", amount: number, at?: Point): Promise<void>;
-	a11yTree?(): Promise<import("./gate").WidgetNode | null>; // Phase 2
+	a11yTree?(): Promise<import("./gate").WidgetNode | null>; // §3 Swift AX backend
 	doctor(): Promise<DoctorReport>;
 }
 
@@ -126,6 +138,8 @@ export function unsupportedAdapter(platform: SupportedPlatform, note: string, ph
 			clipboard: false,
 			notes: [note],
 		},
+		frontmostApp: err,
+		activateApp: err,
 		screenSize: err,
 		screenshot: err,
 		listWindows: err,

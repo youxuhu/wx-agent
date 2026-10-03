@@ -1,15 +1,4 @@
-# machine-local / heavy data — never sync
-sessions/
-npm/
-web-search-cache/
-missions/
-bin/
-# secrets — copy manually or re-login, never commit
-auth.json*
-# transient backups
-*.bak*
-extensions/runs/
-models-store.json
-node_modules/
-package.json
-package-lock.json
+*
+!extensions/
+!extensions/computer-use/
+extensions/computer-use/node_modules/

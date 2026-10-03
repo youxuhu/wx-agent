@@ -6,6 +6,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { FrontAppInfo, PlatformAdapter } from "./platform";
 
 export const CONFIG_PATH = join(homedir(), ".pi", "agent", "computer-use.json");
 
@@ -57,20 +58,50 @@ export type GateResult = { allowed: true } | { allowed: false; reason: string };
  * gateAction — ask/bypass gate for mutating actions.
  * Observation actions always pass. In ask mode with an un-allowlisted action, prompts via
  * ctx.ui.select (Allow once / Always allow / Deny). Without a UI (print mode) acts as Deny.
+ *
+ * B2 (PLAN §2.2): before prompting, snapshot the front app (adapter.frontmostApp); after an
+ * Allow, restore it (adapter.activateApp) so the confirmation dialog does not leave the
+ * following keystrokes in the terminal. Deny/bypass paths do not touch focus.
  */
-export async function gateAction(action: string, ctx: ExtensionContext, cfg: CuaConfig): Promise<GateResult> {
+export async function gateAction(
+	action: string,
+	ctx: ExtensionContext,
+	cfg: CuaConfig,
+	adapter?: PlatformAdapter,
+): Promise<GateResult> {
 	if (OBSERVATION_ACTIONS.has(action)) return { allowed: true };
 	if (cfg.mode === "bypass") return { allowed: true };
 	if (cfg.alwaysAllowed.includes(action)) return { allowed: true };
 	if (!ctx.ui || typeof ctx.ui.select !== "function") {
 		return { allowed: false, reason: "computer: 用户拒绝该动作 (非交互模式需 /cua bypass)" };
 	}
+	let prev: FrontAppInfo | null = null;
+	if (adapter?.frontmostApp) {
+		try {
+			prev = await adapter.frontmostApp();
+		} catch {
+			/* focus restore is best-effort */
+		}
+	}
 	const choice = await ctx.ui.select(`computer-use：允许 ${action}？`, ["Allow once", "Always allow", "Deny"]);
 	if (choice === "Always allow") {
 		if (!cfg.alwaysAllowed.includes(action)) cfg.alwaysAllowed.push(action);
 		saveConfig(cfg);
+		if (prev && adapter?.activateApp) await restoreFocus(adapter, prev);
 		return { allowed: true };
 	}
-	if (choice === "Allow once") return { allowed: true };
+	if (choice === "Allow once") {
+		if (prev && adapter?.activateApp) await restoreFocus(adapter, prev);
+		return { allowed: true };
+	}
 	return { allowed: false, reason: "computer: 用户拒绝该动作" };
+}
+
+/** Best-effort focus restore after the confirmation dialog (PLAN §2.2 step 2). */
+async function restoreFocus(adapter: PlatformAdapter, prev: FrontAppInfo): Promise<void> {
+	try {
+		await adapter.activateApp(prev.bundleId || prev.appName || String(prev.pid));
+	} catch {
+		/* never fail the action because of a focus restore miss */
+	}
 }
