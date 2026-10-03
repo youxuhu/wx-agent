@@ -4,7 +4,7 @@
  * right drawer that carries everything else (files, changes, history, branches, preview, settings).
  * Facts only — every badge shows what the service reported.
  */
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import MessageList from "./components/MessageList.vue";
 import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
@@ -16,6 +16,7 @@ import BranchPanel from "./components/BranchPanel.vue";
 import PreviewPanel from "./components/PreviewPanel.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import FolderPicker from "./components/FolderPicker.vue";
+import { healthOf } from "./health.ts";
 import { useSessionStore } from "./stores/session.ts";
 
 const store = useSessionStore();
@@ -67,6 +68,11 @@ function onResizeKey(event: KeyboardEvent): void {
 	event.preventDefault();
 }
 
+/** Service socket + pi child rolled into one line (see web/src/health.ts). */
+const health = computed(() =>
+	healthOf({ conn: store.conn, piState: store.piState, exitInfo: store.exitInfo, reconnectIn: store.reconnectIn }),
+);
+
 const TABS = [
 	{ key: "files", label: "Files" },
 	{ key: "changes", label: "Changes" },
@@ -113,9 +119,15 @@ onMounted(() => {
 		<header class="topbar">
 			<button class="btn btn-ghost btn-sm" :title="sidebarOpen ? 'Hide tasks' : 'Show tasks'" @click="sidebarOpen = !sidebarOpen">☰</button>
 			<button class="btn btn-sm" @click="store.openFolderPicker()">{{ store.cwd || "choose folder" }}</button>
-			<span class="chip" :class="store.conn === 'open' ? 'chip-ok' : 'chip-warn'">{{ store.conn }}</span>
-			<span class="chip" :class="store.piState === 'running' ? 'chip-ok' : ''">pi: {{ store.piState }}</span>
-			<span v-if="store.running" class="chip chip-warn">running</span>
+			<!--
+				One health indicator instead of two chips that both read "fine" when everything is
+				fine: the browser↔service socket and the pi child process. It names the specific
+				problem when there is one, and stays quiet otherwise.
+			-->
+			<span class="health" :class="health.class" :title="health.title">
+				<span class="dot" />{{ health.label }}
+			</span>
+			<span v-if="store.running" class="chip chip-warn">working…</span>
 			<span v-if="store.pendingUi.length" class="chip chip-danger">{{ store.pendingUi.length }} approval(s)</span>
 			<span class="spacer" />
 			<button

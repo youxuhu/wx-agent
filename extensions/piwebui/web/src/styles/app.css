@@ -747,3 +747,32 @@ input[type="checkbox"] {
 .markdown a {
 	color: #0b5fff;
 }
+
+/* --- health indicator --------------------------------------------------- */
+.health {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--fs-xs);
+	color: var(--fg-muted);
+}
+
+.health .dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: currentColor;
+	opacity: 0.75;
+}
+
+.health-ok {
+	color: var(--ok);
+}
+
+.health-warn {
+	color: var(--warn);
+}
+
+.health-bad {
+	color: var(--danger);
+}

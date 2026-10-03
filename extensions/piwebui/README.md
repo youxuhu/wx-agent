@@ -52,6 +52,7 @@ node probe/ws-probe.ts "reply with exactly: pong" --seconds 90
 - **只用原生控件**：前面 `pick element` 与 `ignored` 两个开关点不动，根因是它们被组件库的 `Tooltip` 包了一层（点击被包裹层吃掉/不可交互）；现在全是 `<input type="checkbox">`、`<select>`、`<button>`，无障碍树里可直接命中。
 - 视觉：1px 浅灰描边、白底、无像素字体、无 emoji、系统字体栈，等宽字体只用于路径/命令/diff；正文 15px，次要 13px，辅助 12px。
 - 只浅色：`html.className = "light"` + `color-scheme: light`，没有深色分支。
+- 顶栏只有一个**健康指示**（`web/src/health.ts`）：把"浏览器↔服务 WebSocket"与"pi 子进程状态"合成一句。正常时只显示绿点 `connected`；异常时点名具体问题——`service closed — retrying in 4s`、`service error`、`pi exited (1)`、`pi stopped`、`connecting…`。底部状态行不再重复连接状态。
 
 ## 会话列表与切换
 
@@ -231,7 +232,7 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 ## 验收
 
-七个探针，共 **99 项**（都需要服务在对应端口运行）：
+八个探针，共 **108 项**（都需要服务在对应端口运行）：
 
 | probe | 覆盖 | 结果 |
 | --- | --- | --- |
@@ -241,6 +242,7 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 | `files-probe.ts`（:7799） | 树列出/`.git` 不展开/ignored 标记/子目录按需、越界 403、`..` 403、软链出界 403、超大与二进制拒绝、目录选择器只列目录 | 13/13 |
 | `git-probe.ts`（:7799，临时仓库） | 状态分类、diff/numstat、stage/commit/log、建分支、脏树切分支拒绝、未知分支拒绝、discard 需确认 + 快照 ref 真实存在、未跟踪不可丢、越界拒绝、冲突 `UU` 识别、无危险 argv | 19/19 |
 | `disconnect-probe.ts`（:7801） | 审批弹窗出现后客户端断线：仍挂起、**不自动放行**、无副作用、重连的客户端仍能收到该弹窗、拒绝后命令确实没跑 | 7/7 |
+| `health-probe.ts`（离线） | 健康指示映射：正常收敛成一句 `connected`；connecting / closed（带重试秒数）/ error / pi exited（带码）/ 无码退出 / stopped 各自命名；socket 问题优先于子进程问题；每个状态都有 tooltip | 9/9 |
 | `markdown-probe.ts`（离线） | 标题/粗斜体/行内代码/围栏块/嵌套列表/引用/表格/链接渲染 + `<script>`、`<img onerror>`、`javascript:` 三种注入样本被中和 | 13/13 |
 
 `node probe/preview-probe.ts`（需先按上面用法起服务）会真实起一个 dev server 并核对：无上游时拒绝、就绪判定、HTML/CSS 改写与脚本注入、CSP 放宽事实、JS 透传、`/__file/` 只读与越界拒绝、`stop` 后进程组确实消失。当前 **17/17 通过**。

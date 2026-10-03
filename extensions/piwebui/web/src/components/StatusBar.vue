@@ -38,10 +38,6 @@ const contextLabel = computed(() => {
 });
 const statuses = computed(() => Object.entries(store.status).filter(([, value]) => value && value.trim().length > 0));
 
-function fmtClock(ms: number | null): string {
-	if (!ms) return "—";
-	return new Date(ms).toLocaleTimeString();
-}
 </script>
 
 <template>
@@ -59,6 +55,5 @@ function fmtClock(ms: number | null): string {
 		<span v-for="[key, value] in statuses" :key="key" class="chip" :title="`setStatus(${key})`">{{ value }}</span>
 		<span class="spacer" />
 		<span class="tiny faint">{{ store.model || "no model" }}<template v-if="store.thinkingLevel"> · {{ store.thinkingLevel }}</template></span>
-		<span class="tiny faint">conn {{ store.conn }}<template v-if="store.reconnectIn"> · retry in {{ store.reconnectIn }}s</template></span>
 	</div>
 </template>
