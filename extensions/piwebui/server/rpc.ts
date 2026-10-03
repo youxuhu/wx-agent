@@ -42,6 +42,12 @@ export interface RpcRecord {
 
 export interface PiRpcOptions {
 	piBin?: string;
+	/**
+	 * Packaged builds have no `pi` command on PATH: the app ships a node binary and pi's
+	 * bundled `cli.js`. When both are given the child is spawned as `<node> <cli.js> …`.
+	 */
+	piNode?: string;
+	piScript?: string;
 	args?: string[];
 	cwd: string;
 }
@@ -72,9 +78,11 @@ export class PiRpcChild extends EventEmitter {
 	start(): void {
 		if (this.child) return;
 		this.state = "starting";
-		const bin = this.options.piBin ?? "pi";
 		const args = this.options.args ?? ["--mode", "rpc"];
-		const child = spawn(bin, args, {
+		// Prefer the node+script pair when the host provides one (desktop builds).
+		const bin = this.options.piNode ?? this.options.piBin ?? "pi";
+		const argv = this.options.piNode && this.options.piScript ? [this.options.piScript, ...args] : args;
+		const child = spawn(bin, argv, {
 			cwd: this.options.cwd,
 			stdio: ["pipe", "pipe", "pipe"],
 			env: { ...process.env, PI_WEB_UI: "1" },

@@ -20,3 +20,6 @@ pi-subagents/
 # extension scratch state only — extension sources stay tracked
 extensions/runs/
 extensions/*/node_modules/
+extensions/piwebui/desktop/resources/
+extensions/piwebui/desktop/src-tauri/target/
+extensions/piwebui/desktop/src-tauri/gen/

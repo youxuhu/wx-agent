@@ -3,6 +3,41 @@
 在浏览器里跑一个 pi 会话：流式对话、工具卡片、扩展审批弹窗（policy 的四选一），
 后续加浏览器预览面板（iframe + 元素拾取）。
 
+## 凭据配置（settings 里的 `/login` 等价物）
+
+`Settings` 抽屉 → **Providers & credentials**：
+
+- 列出 `<agentDir>/auth.json` 里已配置的 provider 及类型（`api_key` / `oauth`），以及是否有值——**密钥值永远不会回传到浏览器**（探针里用真实 auth.json 的内容做过泄漏断言）。
+- 可以**设置/轮换 API key**（写 `auth.json`，原子写 + `.bak` + 权限 0600）、**移除**某 provider 的凭据（直接点即确认删除）。
+- **OAuth 类型（如 openrouter）不能在这里覆盖**：需要终端里 `pi` 的 `/login <provider>`（我们跑不了交互式 OAuth 流程），界面会明确这么告诉你；环境变量也是可行的替代。
+- 同一页还有 **Default model**：写 `settings.json` 的 `defaultProvider` / `defaultModel`，新会话生效。
+
+## 桌面版（Tauri）
+
+打包成 macOS app，**内嵌** Node 运行时与精简后的 pi，不依赖系统装了什么：
+
+```bash
+npm run desktop:prepare   # 组装 desktop/resources（首次会下载 Node 49.9MB）
+npm run desktop:verify    # 自检：裁剪运行时能否起 pi + 所有扩展能否加载
+npm run desktop:build     # 出 .app 与 .dmg（需要 Rust 工具链在 PATH）
+
+# 重新安装（覆盖 /Applications 里的旧版并重启）
+pkill -f "Applications/pi agent.app"; \
+  python3 -c "import shutil; shutil.rmtree('/Applications/pi agent.app', ignore_errors=True)"; \
+  ditto "desktop/src-tauri/target/release/bundle/macos/pi agent.app" "/Applications/pi agent.app" && \
+  open -a "/Applications/pi agent.app"
+```
+
+| 项 | 实测 |
+| --- | --- |
+| `pi agent.app` | **162.9 MiB**（Node 112MB + pi 运行时 76MB + web 156KB + server.mjs 200KB） |
+| `pi agent_0.1.0_aarch64.dmg` | **48.2 MiB** |
+| 启动 | Tauri 壳 → 打包内 `node` → `server.mjs --port 0`（系统分配端口）→ 从就绪行读回端口 → 窗口加载 `http://127.0.0.1:<port>/` |
+
+要点：窗口里加载的仍是**我们自己服务提供的 UI**（同源），所以预览 iframe、元素拾取、审批弹窗全部照旧；关窗时壳会终止服务，服务再收掉所有 pi 子进程与 dev server。未签名，首次打开需右键 → 打开。
+
+维护/排障/打包细节：见 **`MAINTENANCE.md`**（本目录）。
+
 ## 架构
 
 ```

@@ -100,6 +100,14 @@ export const useSessionStore = defineStore("session", {
 		shellExitCode: null as number | null,
 		shellRunning: false,
 		shellExcluded: true,
+		shellTruncatedByPi: false,
+		shellFullOutputPath: "",
+		shellShownFrom: 0,
+		authProviders: [] as Array<{ provider: string; kind: string; hasSecret: boolean; expires?: number }>,
+		authNote: "",
+		authStatus: "",
+		authBusy: false,
+		defaultModelStatus: "",
 		pendingSends: [] as Record<string, unknown>[],
 		reconnectAttempts: 0,
 		pendingFile: "" as string,
@@ -407,7 +415,16 @@ export const useSessionStore = defineStore("session", {
 					return;
 				case "bash_execution_update": {
 					const delta = String(record.delta ?? "");
-					if (delta) this.shellOutput += delta;
+					if (!delta) return;
+					const combined = this.shellOutput + delta;
+					// Keep the buffer bounded, but say where the shown text starts.
+					const LIMIT = 200_000;
+					if (combined.length > LIMIT) {
+						this.shellShownFrom += combined.length - LIMIT;
+						this.shellOutput = combined.slice(-LIMIT);
+					} else {
+						this.shellOutput = combined;
+					}
 					return;
 				}
 				case "session_info_changed":
@@ -534,7 +551,10 @@ export const useSessionStore = defineStore("session", {
 				case "bash": {
 					this.shellRunning = false;
 					this.shellExitCode = typeof data.exitCode === "number" ? data.exitCode : null;
-					// The response can be truncated; streaming already delivered the chunks.
+					// The response may be truncated; the deltas already streamed in. Record the facts
+					// instead of silently showing less than what pi produced.
+					this.shellTruncatedByPi = data.truncated === true;
+					this.shellFullOutputPath = typeof data.fullOutputPath === "string" ? data.fullOutputPath : "";
 					if (data.output && !this.shellOutput) this.shellOutput = String(data.output);
 					return;
 				}
@@ -1037,6 +1057,70 @@ export const useSessionStore = defineStore("session", {
 			this.notice = `"/${name}" is not a discoverable command, so it was sent to the model as plain text. Built-in TUI-only commands (/model, /settings, /hotkeys, /login, /reload, …) have no RPC path — use the control drawer for model/thinking/session and the terminal for /reload.`;
 		},
 
+		// ---- credentials ------------------------------------------------------
+		loadAuth(): void {
+			void fetch("/api/auth")
+				.then((response) => response.json())
+				.then((data: { providers?: Array<{ provider: string; kind: string; hasSecret: boolean; expires?: number }>; note?: string }) => {
+					this.authProviders = data.providers ?? [];
+					this.authNote = data.note ?? "";
+				})
+				.catch((error: unknown) => {
+					this.authStatus = `could not read credentials: ${String(error)}`;
+				});
+		},
+		saveApiKey(provider: string, key: string): void {
+			this.authBusy = true;
+			this.authStatus = "";
+			void fetch("/api/auth", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, key }) })
+				.then((response) => response.json())
+				.then((result: { ok?: boolean; verbatim?: string }) => {
+					this.authBusy = false;
+					this.authStatus = result.ok ? `saved a key for ${provider} (value not echoed back)` : result.verbatim ?? "failed";
+					this.loadAuth();
+				})
+				.catch((error: unknown) => {
+					this.authBusy = false;
+					this.authStatus = `save failed: ${String(error)}`;
+				});
+		},
+		removeCredential(provider: string): void {
+			this.authBusy = true;
+			void fetch(`/api/auth?provider=${encodeURIComponent(provider)}&confirmed=1`, { method: "DELETE" })
+				.then((response) => response.json())
+				.then((result: { ok?: boolean; verbatim?: string }) => {
+					this.authBusy = false;
+					this.authStatus = result.ok ? `removed the stored credential for ${provider}` : result.verbatim ?? "failed";
+					this.loadAuth();
+				})
+				.catch((error: unknown) => {
+					this.authBusy = false;
+					this.authStatus = `remove failed: ${String(error)}`;
+				});
+		},
+		/** settings.json holds the defaults; patch just those two fields. */
+		applyDefaultModel(provider: string, model: string): void {
+			void fetch("/api/config")
+				.then((response) => response.json())
+				.then(async (config: { files?: Array<{ name: string; content: string }> }) => {
+					const file = config.files?.find((entry) => entry.name === "settings.json");
+					if (!file) throw new Error("settings.json is not readable");
+					const parsed = JSON.parse(file.content) as Record<string, unknown>;
+					if (provider.trim()) parsed.defaultProvider = provider.trim();
+					if (model.trim()) parsed.defaultModel = model.trim();
+					const write = await fetch("/api/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "settings.json", content: `${JSON.stringify(parsed, null, 2)}
+` }) });
+					const result = (await write.json()) as { ok?: boolean; error?: string };
+					this.defaultModelStatus = result.ok
+						? `settings.json updated (defaults: ${parsed.defaultProvider ?? "-"} / ${parsed.defaultModel ?? "-"}) — new sessions use it, /reload applies the rest`
+						: `refused: ${result.error}`;
+					this.loadConfigFiles();
+				})
+				.catch((error: unknown) => {
+					this.defaultModelStatus = `failed: ${String(error)}`;
+				});
+		},
+
 		requestCommands(): void {
 			this.send({ type: "get_commands" });
 		},
@@ -1104,6 +1188,9 @@ export const useSessionStore = defineStore("session", {
 			this.shellOutput = "";
 			this.shellExitCode = null;
 			this.shellRunning = true;
+			this.shellShownFrom = 0;
+			this.shellTruncatedByPi = false;
+			this.shellFullOutputPath = "";
 			this.send({ type: "bash", command, excludeFromContext: this.shellExcluded });
 		},
 		abortBash(): void {

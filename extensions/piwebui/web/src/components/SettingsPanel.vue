@@ -3,12 +3,60 @@
  * Settings drawer: model / thinking / behaviour, discoverable commands, session tools, shell
  * and the allowlisted config files. Every button is a real RPC command or HTTP endpoint.
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useSessionStore } from "../stores/session.ts";
 
 const store = useSessionStore();
 const renameDraft = ref("");
 const filter = ref("");
+const authProvider = ref("");
+const authKey = ref("");
+const defaultProvider = ref("");
+const defaultModel = ref("");
+const shellBox = ref<HTMLElement | null>(null);
+
+const oauthProviders = computed(() => store.authProviders.filter((entry) => entry.kind === "oauth").map((entry) => entry.provider));
+
+const TREE_LIMIT = 20_000;
+const treeText = computed(() => {
+	const text = JSON.stringify(store.tree, null, 1);
+	return text.length > TREE_LIMIT ? text.slice(0, TREE_LIMIT) : text;
+});
+const treeTrimmed = computed(() => JSON.stringify(store.tree, null, 1).length > TREE_LIMIT);
+
+function saveKey(): void {
+	const provider = authProvider.value.trim();
+	const key = authKey.value;
+	if (!provider || !key.trim()) return;
+	store.saveApiKey(provider, key);
+	authKey.value = "";
+}
+
+function loadDefaults(): void {
+	void fetch("/api/config")
+		.then((response) => response.json())
+		.then((config: { files?: Array<{ name: string; content: string }> }) => {
+			const file = config.files?.find((entry) => entry.name === "settings.json");
+			if (!file) return;
+			const parsed = JSON.parse(file.content) as { defaultProvider?: string; defaultModel?: string };
+			defaultProvider.value = parsed.defaultProvider ?? "";
+			defaultModel.value = parsed.defaultModel ?? "";
+		})
+		.catch(() => undefined);
+}
+
+function copy(text: string): void {
+	void navigator.clipboard?.writeText(text);
+}
+
+/** Keep the newest shell output in view. */
+watch(
+	() => store.shellOutput,
+	async () => {
+		await nextTick();
+		if (shellBox.value) shellBox.value.scrollTop = shellBox.value.scrollHeight;
+	},
+);
 
 const statsLines = computed(() => {
 	const stats = store.stats;
@@ -39,6 +87,8 @@ function rename(): void {
 }
 
 onMounted(() => {
+	store.loadAuth();
+	loadDefaults();
 	if (!store.commands.length) store.requestCommands();
 	if (!store.models.length) store.requestModels();
 	if (!store.thinkingLevels.length) store.requestThinkingLevels();
@@ -78,6 +128,44 @@ onMounted(() => {
 				{{ mode }}
 			</button>
 		</div>
+
+		<h4>Providers &amp; credentials</h4>
+		<p class="fact tiny">
+			Equivalent of the terminal's <code>/login</code> for API keys: set or rotate a key here, or remove one. Values are
+			<strong>never</strong> read back into the browser — only "configured / not configured" is shown. OAuth providers
+			({{ oauthProviders.length ? oauthProviders.join(", ") : "none" }}) still need <code>/login &lt;provider&gt;</code> in the terminal, and
+			environment variables also work as a fallback.
+		</p>
+		<div class="row-nowrap">
+			<input v-model="authProvider" class="field" list="known-providers" placeholder="provider id, e.g. deepseek" />
+			<datalist id="known-providers">
+				<option v-for="entry in store.authProviders" :key="entry.provider" :value="entry.provider" />
+			</datalist>
+			<input v-model="authKey" class="field" type="password" placeholder="API key (written to auth.json, 0600)" @keydown.enter="saveKey()" />
+			<button class="btn btn-sm btn-primary" :disabled="store.authBusy || !authProvider.trim() || !authKey.trim()" @click="saveKey()">Save key</button>
+		</div>
+		<div class="list">
+			<div v-for="entry in store.authProviders" :key="entry.provider" class="list-row">
+				<span class="mono">{{ entry.provider }}</span>
+				<span class="chip" :class="entry.hasSecret ? 'chip-ok' : ''">{{ entry.kind }}{{ entry.hasSecret ? "" : " (empty)" }}</span>
+				<button class="btn btn-sm btn-ghost" @click="authProvider = entry.provider">Use</button>
+				<span class="spacer" />
+				<button class="btn btn-sm btn-ghost btn-danger" :disabled="store.authBusy" @click="store.removeCredential(entry.provider)">Remove</button>
+			</div>
+			<div v-if="!store.authProviders.length" class="list-row faint">no stored credentials yet</div>
+		</div>
+		<p v-if="store.authStatus" class="fact">{{ store.authStatus }}</p>
+		<p v-if="store.authNote" class="fact tiny faint">{{ store.authNote }}</p>
+
+		<h4>Default model</h4>
+		<p class="fact tiny">Written to <code>settings.json</code> (<code>defaultProvider</code> / <code>defaultModel</code>); new sessions pick it up.</p>
+		<div class="row-nowrap">
+			<input v-model="defaultProvider" class="field" placeholder="provider, e.g. deepseek" />
+			<input v-model="defaultModel" class="field" placeholder="model, e.g. deepseek-flash" />
+			<button class="btn btn-sm" @click="store.applyDefaultModel(defaultProvider, defaultModel)">Save defaults</button>
+			<button class="btn btn-sm btn-ghost" @click="loadDefaults()">Load current</button>
+		</div>
+		<p v-if="store.defaultModelStatus" class="fact">{{ store.defaultModelStatus }}</p>
 
 		<details>
 			<summary class="tiny dim">available models ({{ store.models.length }})</summary>
@@ -145,13 +233,31 @@ onMounted(() => {
 			<button class="btn btn-sm" @click="store.exportHtml()">Export HTML</button>
 			<button class="btn btn-sm" @click="store.copyLastAssistant()">Last assistant text</button>
 		</div>
-		<pre v-if="statsLines.length" class="code-block">{{ statsLines.join("\n") }}</pre>
+		<div v-if="statsLines.length" class="output">
+			<div class="output-head"><span>stats</span><span class="spacer" /><button class="btn btn-sm btn-ghost" @click="copy(statsLines.join('\n'))">Copy</button></div>
+			<pre class="code-block">{{ statsLines.join("\n") }}</pre>
+		</div>
 		<div v-for="point in store.forkPoints" :key="point.entryId" class="row">
 			<button class="btn btn-sm" @click="store.forkFrom(point.entryId)">Fork</button>
 			<span class="tiny faint ellipsis">{{ (point.text || point.preview || point.entryId).slice(0, 120) }}</span>
 		</div>
-		<pre v-if="store.tree.length" class="code-block">{{ JSON.stringify(store.tree, null, 1).slice(0, 4000) }}</pre>
-		<pre v-if="store.lastAssistantText" class="code-block">{{ store.lastAssistantText.slice(0, 4000) }}</pre>
+		<div v-if="store.tree.length" class="output">
+			<div class="output-head">
+				<span>session tree · {{ treeText.length }} chars<template v-if="treeTrimmed"> (showing first 20000)</template></span>
+				<span class="spacer" />
+				<button class="btn btn-sm btn-ghost" @click="copy(treeText)">Copy</button>
+			</div>
+			<pre class="code-block">{{ treeText }}</pre>
+		</div>
+		<div v-if="store.lastAssistantText" class="output">
+			<div class="output-head">
+				<span>last assistant text · {{ store.lastAssistantText.length }} chars</span>
+				<span class="spacer" />
+				<button class="btn btn-sm btn-ghost" @click="copy(store.lastAssistantText)">Copy</button>
+				<button class="btn btn-sm btn-ghost" @click="store.insertIntoPrompt(store.lastAssistantText)">Insert into prompt</button>
+			</div>
+			<pre class="code-block">{{ store.lastAssistantText }}</pre>
+		</div>
 
 		<!-- shell -->
 		<h4>Shell</h4>
@@ -166,7 +272,17 @@ onMounted(() => {
 			<span v-if="store.shellExitCode !== null" class="chip">exit {{ store.shellExitCode }}</span>
 			<span v-if="store.shellRunning" class="chip chip-warn">running</span>
 		</div>
-		<pre v-if="store.shellOutput" class="code-block">{{ store.shellOutput.slice(-8000) }}</pre>
+		<div v-if="store.shellOutput" class="output">
+			<div class="output-head">
+				<span>{{ store.shellOutput.length }} chars shown</span>
+				<span v-if="store.shellShownFrom" class="err">earlier {{ store.shellShownFrom }} chars dropped from the buffer</span>
+				<span v-if="store.shellTruncatedByPi" class="err">pi truncated its response</span>
+				<span v-if="store.shellFullOutputPath" class="mono ellipsis">full log: {{ store.shellFullOutputPath }}</span>
+				<span class="spacer" />
+				<button class="btn btn-sm btn-ghost" @click="copy(store.shellOutput)">Copy</button>
+			</div>
+			<pre ref="shellBox" class="code-block">{{ store.shellOutput }}</pre>
+		</div>
 
 		<!-- config -->
 		<h4>Config files</h4>

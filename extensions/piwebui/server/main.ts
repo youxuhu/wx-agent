@@ -7,6 +7,8 @@
  * the invariants in PLAN.md §5 can be enforced in one place.
  *
  * Usage: node server/main.ts [--port 7799] [--cwd <dir>] [--pi <bin>] [--model <id>]
+ *        [--pi-node <node> --pi-script <cli.js>]   # packaged builds without a `pi` command
+ *        [--agent-dir <dir>] [--web-dir <dir>]     # web-dir: built UI, default sibling `dist/`
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -22,17 +24,24 @@ import { isSessionPathOf, listSessions } from "./sessions.ts";
 import { FILE_PREFIX, PROXY_PREFIX, filePreview, proxyRequest } from "./preview.ts";
 import { Workspace, workspaceKey } from "./workspace.ts";
 import { browse, listDir, readText } from "./fs.ts";
+import { listAuth, removeProvider, setApiKey } from "./auth.ts";
 import * as git from "./git.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, "..");
-const distDir = join(projectRoot, "dist");
+/** Where the built UI lives; a desktop shell overrides it with `--web-dir`. */
+let distDir = join(projectRoot, "dist");
 
 interface Args {
 	port: number;
 	host: string;
 	cwd: string;
 	piBin: string;
+	/** Optional node binary + script pair, for builds without a `pi` command on PATH. */
+	piNode?: string;
+	piScript?: string;
+	agentDir?: string;
+	webDir?: string;
 	model?: string;
 	thinking?: string;
 }
@@ -46,6 +55,10 @@ function parseArgs(argv: string[]): Args {
 		else if (key === "--host" && value) args.host = value;
 		else if (key === "--cwd" && value) args.cwd = resolve(value);
 		else if (key === "--pi" && value) args.piBin = value;
+		else if (key === "--pi-node" && value) args.piNode = value;
+		else if (key === "--pi-script" && value) args.piScript = value;
+		else if (key === "--agent-dir" && value) args.agentDir = resolve(value);
+		else if (key === "--web-dir" && value) args.webDir = resolve(value);
 		else if (key === "--model" && value) args.model = value;
 		else if (key === "--thinking" && value) args.thinking = value;
 	}
@@ -174,8 +187,9 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 function main(): void {
 	const args = parseArgs(process.argv.slice(2));
+	if (args.webDir) distDir = args.webDir;
 	// Sessions live next to the config that pi itself uses (PI_CODING_AGENT_DIR wins).
-	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? "", ".pi", "agent");
+	const agentDir = args.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? "", ".pi", "agent");
 
 	// Invariant: loopback only. A non-loopback host would expose the session to the network.
 	const loopback = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -393,6 +407,39 @@ function main(): void {
 			return;
 		}
 
+		if (url.pathname === "/api/auth" && req.method === "GET") {
+			void listAuth(agentDir)
+				.then((snapshot) => {
+					res.writeHead(200, { "content-type": "application/json" });
+					res.end(JSON.stringify(snapshot));
+				})
+				.catch((error: unknown) => fail(500, String(error)));
+			return;
+		}
+		if (url.pathname === "/api/auth" && req.method === "PUT") {
+			void (async () => {
+				let body: { provider?: string; key?: string };
+				try {
+					body = JSON.parse((await readBody(req)) || "{}") as typeof body;
+				} catch (error) {
+					return fail(400, `unreadable body: ${String(error)}`);
+				}
+				const result = await setApiKey(agentDir, String(body.provider ?? ""), String(body.key ?? ""));
+				res.writeHead(result.ok ? 200 : 400, { "content-type": "application/json" });
+				res.end(JSON.stringify(result));
+			})().catch((error: unknown) => fail(500, String(error)));
+			return;
+		}
+		if (url.pathname === "/api/auth" && req.method === "DELETE") {
+			void (async () => {
+				const provider = url.searchParams.get("provider") ?? "";
+				const confirmed = url.searchParams.get("confirmed") === "1";
+				const result = await removeProvider(agentDir, provider, confirmed);
+				res.writeHead(result.ok ? 200 : 400, { "content-type": "application/json" });
+				res.end(JSON.stringify(result));
+			})().catch((error: unknown) => fail(500, String(error)));
+			return;
+		}
 		if (url.pathname === "/api/config" && req.method === "GET") {
 			void (async () => {
 				const files = [];
@@ -533,7 +580,7 @@ function main(): void {
 				if (workspace) broadcast(previewInfo(workspace), workspace);
 			},
 		};
-		const workspace = new Workspace(key, { piBin: args.piBin, piArgs, agentDir, hooks });
+		const workspace = new Workspace(key, { piBin: args.piBin, piNode: args.piNode, piScript: args.piScript, piArgs, agentDir, hooks });
 		workspaces.set(key, workspace);
 		recent = [key, ...recent.filter((item) => item !== key)].slice(0, 20);
 		saveRecent();
@@ -831,7 +878,12 @@ function main(): void {
 	void loadRecent().then(() => broadcastWorkspaces());
 
 	server.listen(args.port, args.host, () => {
-		console.log(`pi web ui on http://${args.host}:${args.port} (workspace ${activeKey}, model ${args.model ?? "pi default"})`);
+		const address = server.address();
+		const port = typeof address === "object" && address ? address.port : args.port;
+		console.log(`pi web ui on http://${args.host}:${port} (workspace ${activeKey}, model ${args.model ?? "pi default"})`);
+		// Machine-readable handshake for a desktop shell (it passes 0 and lets the OS pick a
+		// port). Humans can ignore this line.
+		console.log(JSON.stringify({ type: "piwebui-ready", host: args.host, port }));
 	});
 
 	const shutdown = (): void => {

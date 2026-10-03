@@ -479,7 +479,10 @@ h4 {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
-	min-height: 0;
+	/* Never shrink: inside the scrolling drawer body a flexible child gets squeezed and its
+	   content is clipped (this was the "section shows only partially" bug). */
+	flex: 0 0 auto;
+	min-width: 0;
 }
 
 .list {
@@ -529,11 +532,28 @@ h4 {
 	color: var(--fg-muted);
 }
 
+/* Long output: one scroller, with the facts about what is shown above the text. */
+.output {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.output-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	font-size: var(--fs-xs);
+	color: var(--fg-muted);
+}
+
 .code-block {
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	padding: 8px;
-	max-height: 46vh;
+	max-height: 52vh;
 	overflow: auto;
 	background: var(--bg-subtle);
 }

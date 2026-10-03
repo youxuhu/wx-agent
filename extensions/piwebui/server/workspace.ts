@@ -48,10 +48,10 @@ export class Workspace {
 	isRepo = false;
 	private configLoaded = false;
 
-	constructor(cwd: string, options: { piBin: string; piArgs: string[]; agentDir: string; hooks: WorkspaceHooks }) {
+	constructor(cwd: string, options: { piBin: string; piNode?: string; piScript?: string; piArgs: string[]; agentDir: string; hooks: WorkspaceHooks }) {
 		this.cwd = cwd;
 		this.previewRoot = cwd;
-		this.child = new PiRpcChild({ cwd, piBin: options.piBin, args: options.piArgs });
+		this.child = new PiRpcChild({ cwd, piBin: options.piBin, piNode: options.piNode, piScript: options.piScript, args: options.piArgs });
 		this.devServer = new DevServer(cwd, {
 			onStatus: () => options.hooks.preview(),
 			onLog: () => undefined,
