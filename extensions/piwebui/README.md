@@ -35,6 +35,19 @@ node server/main.ts --port 7799 --cwd /path/to/project \
 node probe/ws-probe.ts "reply with exactly: pong" --seconds 90
 ```
 
+## 会话列表与切换
+
+`/api/sessions`（以及 WS 的 `list_sessions`）从磁盘读当前 cwd 的会话文件（pi 存于
+`<agentDir>/sessions/<cwd 编码>/<时间戳>_<id>.jsonl`；编码为 `--` + 去掉前导 `/` 并把 `/`→`-` + `--`，
+cwd 先做 realpath，故 `/tmp` 落到 `--private-tmp--`）。列表包含：名称（`session_name` 条目）、
+首条用户提示、消息条数、大小、时间。
+
+- **切换**：WS `{type:"switch_session", path}` → 子进程 `switch_session`；成功后自动
+  `get_messages` + `get_state` + `list_sessions` 重新水合界面。
+- **重命名**：WS `{type:"set_session_name", name}`（名称来自 `get_state.sessionName`）。
+- **invariant**：只允许切换到**当前 cwd 会话目录内**的 `.jsonl`；其他路径一律拒绝并报事实。
+- 界面：标题栏 `sessions` 按钮打开抽屉，行内显示 `current` / `switch`、时间、条数、大小与首句。
+
 ## 参数
 
 | 参数 | 默认 | 说明 |

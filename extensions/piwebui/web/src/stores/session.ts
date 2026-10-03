@@ -10,13 +10,17 @@
 import { defineStore } from "pinia";
 import {
 	blocksToText,
+	messageToBlocks,
 	messageToText,
-	type Block,
 	type ChatMessage,
 	type ConnState,
+	type SessionSummary,
 	type ToolRun,
 	type UiRequest,
 } from "../types.ts";
+
+/** Only these extension UI methods are dialogs that expect an answer. */
+const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
 interface WireRecord {
 	type: string;
@@ -39,6 +43,13 @@ export const useSessionStore = defineStore("session", {
 		usage: null as null | { input: number; output: number; totalTokens: number; cost: number },
 		queueSteering: 0,
 		queueFollowUp: 0,
+		status: {} as Record<string, string>,
+		sessions: [] as SessionSummary[],
+		currentSessionPath: null as string | null,
+		sessionName: null as string | null,
+		showSessions: false,
+		model: "" as string,
+		thinkingLevel: "" as string,
 		retry: null as null | { attempt: number; max: number; reason: string },
 	}),
 
@@ -50,6 +61,9 @@ export const useSessionStore = defineStore("session", {
 
 			socket.addEventListener("open", () => {
 				this.conn = "open";
+				// hydrate: current session + the session list
+				this.send({ type: "get_state" });
+				this.send({ type: "list_sessions" });
 			});
 			socket.addEventListener("close", () => {
 				this.conn = "closed";
@@ -82,9 +96,15 @@ export const useSessionStore = defineStore("session", {
 				case "hello": {
 					this.cwd = String(payload.cwd ?? "");
 					this.piState = String(payload.state ?? "unknown");
+					this.currentSessionPath = (payload.currentSessionPath as string | null) ?? null;
 					this.exitInfo = (payload.exitInfo as typeof this.exitInfo) ?? null;
 					const pending = (payload.pendingUi as UiRequest[] | undefined) ?? [];
 					this.pendingUi = pending;
+					return;
+				}
+				case "sessions": {
+					this.sessions = (payload.items as SessionSummary[] | undefined) ?? [];
+					this.currentSessionPath = (payload.current as string | null) ?? this.currentSessionPath;
 					return;
 				}
 				case "pi_state": {
@@ -125,6 +145,10 @@ export const useSessionStore = defineStore("session", {
 		},
 
 		handleRecord(record: WireRecord): void {
+			if (record.type === "response") {
+				this.handleResponse(record);
+				return;
+			}
 			switch (record.type) {
 				case "agent_start":
 					this.running = true;
@@ -136,9 +160,10 @@ export const useSessionStore = defineStore("session", {
 					return;
 				case "message_start": {
 					const message = record.message as { role?: string; id?: string } | undefined;
-					const role = message?.role === "user" ? "user" : message?.role === "assistant" ? "assistant" : "system";
+					// the system prompt is not a conversation message
+					if (message?.role === "system") return;
+					const role = message?.role === "user" ? "user" : "assistant";
 					const id = String(message?.id ?? `m-${this.messages.length}-${Date.now()}`);
-					// user echoes arrive as their own message; assistant messages stream below
 					this.messages.push({ id, role, blocks: role === "user" ? [{ kind: "text", text: messageToText(message) }] : [], done: role === "user" });
 					return;
 				}
@@ -154,7 +179,8 @@ export const useSessionStore = defineStore("session", {
 							current.blocks = [{ kind: "text", text: `model error: ${message.errorMessage ?? message.stopReason ?? "unknown error"}` }];
 							this.lastError = `${message.errorMessage ?? message.stopReason ?? "model error"}`;
 						} else {
-							current.blocks = [{ kind: "text", text: messageToText(message) }];
+							// replace the streamed deltas with the authoritative content blocks
+							current.blocks = messageToBlocks(message);
 						}
 						current.done = true;
 					}
@@ -207,8 +233,16 @@ export const useSessionStore = defineStore("session", {
 					this.retry = null;
 					if (record.success === false) this.lastError = `retries exhausted: ${String(record.finalError ?? "")}`;
 					return;
+				case "session_info_changed":
+					this.send({ type: "get_state" });
+					return;
 				case "extension_ui_request": {
-					const request = record as unknown as UiRequest;
+					const request = record as unknown as UiRequest & { statusText?: string; statusKey?: string; text?: string };
+					if (!DIALOG_METHODS.has(request.method)) {
+						// one-way status/notify records are not approvals
+						this.status[request.statusKey ?? request.method] = String(request.statusText ?? request.text ?? "");
+						return;
+					}
 					if (!this.pendingUi.some((item) => item.id === request.id)) this.pendingUi.push(request);
 					return;
 				}
@@ -233,6 +267,63 @@ export const useSessionStore = defineStore("session", {
 				default:
 					return;
 			}
+		},
+
+		/** Responses to commands we sent (state, messages, session switching). */
+		handleResponse(record: WireRecord): void {
+			const command = String(record.command ?? "");
+			const data = (record.data ?? {}) as Record<string, unknown>;
+			if (record.success === false) {
+				this.lastError = `${command} failed: ${JSON.stringify(record.error ?? data).slice(0, 300)}`;
+				return;
+			}
+			switch (command) {
+				case "get_state": {
+					this.currentSessionPath = (data.sessionFile as string) ?? this.currentSessionPath;
+					this.sessionName = (data.sessionName as string) ?? null;
+					const model = data.model as { provider?: string; id?: string } | undefined;
+					if (model) this.model = [model.provider, model.id].filter(Boolean).join("/");
+					this.thinkingLevel = String(data.thinkingLevel ?? "");
+					return;
+				}
+				case "get_messages": {
+					this.replaceMessages((data.messages as unknown[] | undefined) ?? []);
+					return;
+				}
+				case "switch_session":
+					if (data.cancelled) {
+						this.lastError = "pi cancelled the session switch (an extension blocked it)";
+						return;
+					}
+					this.send({ type: "get_state" });
+					this.send({ type: "get_messages" });
+					this.send({ type: "list_sessions" });
+					return;
+				case "set_session_name":
+					this.send({ type: "get_state" });
+					this.send({ type: "list_sessions" });
+					return;
+				case "new_session":
+					if (data.cancelled) this.lastError = "pi cancelled the new session (an extension blocked it)";
+					this.send({ type: "get_state" });
+					this.send({ type: "get_messages" });
+					this.send({ type: "list_sessions" });
+					return;
+				default:
+					return;
+			}
+		},
+
+		/** Replace the whole message list from an authoritative `get_messages` payload. */
+		replaceMessages(messages: unknown[]): void {
+			const rebuilt: ChatMessage[] = [];
+			for (const [index, raw] of messages.entries()) {
+				const message = raw as { role?: string; id?: string };
+				if (message.role !== "user" && message.role !== "assistant") continue;
+				rebuilt.push({ id: String(message.id ?? `h-${index}`), role: message.role, blocks: messageToBlocks(raw), done: true });
+			}
+			this.messages = rebuilt;
+			this.tools = {};
 		},
 
 		applyUpdate(record: WireRecord): void {
@@ -295,6 +386,16 @@ export const useSessionStore = defineStore("session", {
 			this.messages = [];
 			this.tools = {};
 			this.send({ type: "new_session" });
+		},
+		listSessions(): void {
+			this.send({ type: "list_sessions" });
+		},
+		switchSession(path: string): void {
+			if (path === this.currentSessionPath) return;
+			this.send({ type: "switch_session", path });
+		},
+		renameSession(name: string): void {
+			this.send({ type: "set_session_name", name });
 		},
 		compact(): void {
 			this.send({ type: "compact" });

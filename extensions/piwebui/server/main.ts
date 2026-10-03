@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { PiRpcChild, type RpcRecord, type UiRequest } from "./rpc.ts";
+import { isSessionPathOf, listSessions } from "./sessions.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, "..");
@@ -90,6 +91,10 @@ const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
 function main(): void {
 	const args = parseArgs(process.argv.slice(2));
+	// Sessions live next to the config that pi itself uses (PI_CODING_AGENT_DIR wins).
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? "", ".pi", "agent");
+	/** Last session file the child reported, used to mark the current row in listings. */
+	let currentSessionPath: string | null = null;
 
 	// Invariant: loopback only. A non-loopback host would expose the session to the network.
 	const loopback = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -110,7 +115,19 @@ function main(): void {
 		const url = new URL(req.url ?? "/", `http://${args.host}:${args.port}`);
 		if (url.pathname === "/api/health") {
 			res.writeHead(200, { "content-type": "application/json" });
-			res.end(JSON.stringify({ ok: true, state: child.getState(), cwd: args.cwd, pendingUi: pendingUi.size }));
+			res.end(JSON.stringify({ ok: true, state: child.getState(), cwd: args.cwd, pendingUi: pendingUi.size, currentSessionPath }));
+			return;
+		}
+		if (url.pathname === "/api/sessions") {
+			void listSessions(args.cwd, agentDir)
+				.then((items) => {
+					res.writeHead(200, { "content-type": "application/json" });
+					res.end(JSON.stringify({ items, current: currentSessionPath, cwd: args.cwd }));
+				})
+				.catch((error: unknown) => {
+					res.writeHead(500, { "content-type": "application/json" });
+					res.end(JSON.stringify({ error: String(error) }));
+				});
 			return;
 		}
 		void serveStatic(url.pathname, res);
@@ -129,6 +146,7 @@ function main(): void {
 				type: "hello",
 				state: child.getState(),
 				cwd: args.cwd,
+				currentSessionPath,
 				exitInfo: child.getExitInfo(),
 				pendingUi: [...pendingUi.values()],
 			}),
@@ -172,6 +190,30 @@ function main(): void {
 			case "get_messages":
 				child.command("get_messages");
 				return;
+			case "list_sessions":
+				void listSessions(args.cwd, agentDir)
+					.then((items) => socket.send(JSON.stringify({ type: "sessions", items, current: currentSessionPath })))
+					.catch((error: unknown) => socket.send(JSON.stringify({ type: "error", message: `list_sessions failed: ${String(error)}` })));
+				return;
+			case "switch_session": {
+				const path = String(message.path ?? "");
+				if (!path) {
+					broadcast({ type: "error", message: "switch_session needs a path" });
+					return;
+				}
+				// Invariant: only session files of this cwd's session directory may be loaded.
+				void isSessionPathOf(args.cwd, agentDir, path).then((ok) => {
+					if (!ok) {
+						broadcast({ type: "error", message: `refused: not a session file of ${args.cwd}: ${path}` });
+						return;
+					}
+					child.command("switch_session", { sessionPath: path });
+				});
+				return;
+			}
+			case "set_session_name":
+				child.command("set_session_name", { name: String(message.name ?? "") });
+				return;
 			case "compact":
 				child.command("compact");
 				return;
@@ -202,6 +244,15 @@ function main(): void {
 	}
 
 	child.on("record", (record: RpcRecord) => {
+		// Track the current session file so listings can mark it.
+		if (record.type === "response" && record.command === "get_state") {
+			const data = record.data as { sessionFile?: string } | undefined;
+			if (data?.sessionFile) currentSessionPath = data.sessionFile;
+		}
+		if (record.type === "response" && record.command === "switch_session") {
+			const data = record.data as { cancelled?: boolean } | undefined;
+			if (!data?.cancelled) currentSessionPath = (record as { sessionPath?: string }).sessionPath ?? currentSessionPath;
+		}
 		if (record.type === "extension_ui_request") {
 			const request = record as unknown as UiRequest;
 			if (!DIALOG_METHODS.has(request.method)) {

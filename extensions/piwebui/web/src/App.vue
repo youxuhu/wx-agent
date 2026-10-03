@@ -8,6 +8,7 @@ import { Badge, Button, Space, Tag } from "@pixelium/web-vue";
 import MessageList from "./components/MessageList.vue";
 import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
+import SessionDrawer from "./components/SessionDrawer.vue";
 import { useSessionStore } from "./stores/session.ts";
 
 const store = useSessionStore();
@@ -25,6 +26,8 @@ onMounted(() => store.connect());
 			<span class="dim ellipsis">{{ store.cwd }}</span>
 			<Space class="head-right">
 				<Badge v-if="store.pendingUi.length" theme="danger">{{ store.pendingUi.length }} approval{{ store.pendingUi.length > 1 ? "s" : "" }}</Badge>
+				<Tag v-if="store.sessionName" theme="notice">{{ store.sessionName }}</Tag>
+				<Button size="small" variant="text" @click="store.showSessions = true">sessions</Button>
 				<Button size="small" variant="text" @click="store.newSession()">new session</Button>
 				<Button size="small" variant="text" @click="store.compact()">compact</Button>
 			</Space>
@@ -58,6 +61,8 @@ onMounted(() => store.connect());
 			@select="store.answerSelect($event.id, $event.value)"
 			@confirm="store.answerConfirm($event.id, $event.confirmed)"
 		/>
+
+		<SessionDrawer />
 	</div>
 </template>
 
