@@ -4,11 +4,20 @@ npm/
 web-search-cache/
 missions/
 bin/
-# secrets — copy manually or re-login, never commit
+node_modules/
+# machine-local state / secrets — copy manually or re-login, never commit
 auth.json*
-# transient backups
 *.bak*
-# v3.1: track only extensions/computer-use (everything else machine-local)
+computer-use.json
+models-store.json
+models.json
+run-history.jsonl
+sandbox.json
+trust.json
+package.json
+package-lock.json
+pi-subagents/
+# v3.1: track only extensions/computer-use
 extensions/*
 !extensions/computer-use
 extensions/computer-use/node_modules/
