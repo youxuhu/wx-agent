@@ -490,7 +490,7 @@ export function createAdapter(): PlatformAdapter {
 				}
 				if (!launched) {
 					launched = true;
-					if (!launch()) throw new Error(`activateApp: no running app matched '${t}' and launch failed (open -a / osascript). The name may be a localized display name — list_apps returns installed app names/bundleIds.`); // fail fast + factual pointer
+					if (!launch()) throw new Error(`activateApp: no running app matched '${t}' and launch failed (open -a / osascript). The name may be a localized display name — match it against the installed-app list and retry with the English name or bundleId.`); // fail fast + factual pointer
 				}
 				await new Promise((res) => setTimeout(res, 500));
 			}

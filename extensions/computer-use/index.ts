@@ -57,12 +57,14 @@ interface SessionState {
 	lastRepeatKey: string | null;
 	lastRepeatAt: number;
 	lastFullLogical: { width: number; height: number }; // logical size of the last full screenshot
+	appListCache: { name: string; bundleId: string; path: string }[] | null; // v3.6: installed apps, fetched once per session
 }
 
 const state: SessionState = {
 	adapter: null,
 	controller: new ProgressController(),
 	cfg: loadConfig(),
+	appListCache: null,
 	lastHash: null,
 	lastWindows: [],
 	knownWindows: null,
@@ -270,7 +272,24 @@ export default function computerUse(pi: ExtensionAPI): void {
 						const app = (params.app ?? "").trim();
 						if (!app) return err(`computer: activate requires app (App 名或 bundleId)`);
 						target = `activate:${app}`;
-						await adapter.activateApp(app);
+						try {
+							await adapter.activateApp(app);
+						} catch (e) {
+							// v3.6: unresolvable name (e.g. localized display name) → inline the
+							// installed-app list in the SAME response so the model matches
+							// (音乐→Music) and retries next action — no separate list_apps call.
+							let apps = state.appListCache;
+							if (!apps) {
+								try {
+									apps = await adapter.listApps();
+									state.appListCache = apps;
+								} catch {
+									/* platform without listApps — bare error */
+								}
+							}
+							const list = apps ? `\n-- installed apps (name\tbundleId) --\n${apps.map((a) => `${a.name}\t${a.bundleId}`).join("\n")}` : "";
+							return err(`${e instanceof Error ? e.message : String(e)}${list}`);
+						}
 						break;
 					}
 					case "left_click":

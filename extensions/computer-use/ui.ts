@@ -34,7 +34,8 @@ scroll + up|down      滚轮滚动，amount 默认 3
 wait   + ms           等待 100..10000 毫秒（不产生观察）
 list_windows          仅窗口清单（不截图）
 activate + app        打开/切换 App 一步到位：未运行自动启动，最小化自动恢复，置顶；返回 full 观察。
-                      本地化名打不开时（如中文 App 名）：用 list_apps 查名单后按英文名/bundleId 重试
+                      名字解析失败时，错误返回值直接内嵌全部已安装应用名单——当场匹配
+                      （如 音乐→Music）后用英文名/bundleId 重试即可，无需再调 list_apps
 list_apps             已安装应用名单（名称/bundleId/路径），纯文本；语义匹配（如 音乐→Music）自己做
 help                  返回本手册
 
