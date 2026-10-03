@@ -13,17 +13,34 @@ const props = defineProps<{
 	draftSeq: number;
 	busyHint?: string;
 }>();
-const emit = defineEmits<{ (event: "prompt", text: string): void; (event: "steer", text: string): void; (event: "abort"): void }>();
+const emit = defineEmits<{
+	(event: "prompt", text: string): void;
+	(event: "steer", text: string): void;
+	(event: "abort"): void;
+	(event: "notice", text: string): void;
+}>();
 
 const text = ref("");
 const steerMode = ref(false);
 const area = ref<HTMLTextAreaElement | null>(null);
+/**
+ * The steer switch is always clickable. It only *changes delivery* while a run is active:
+ * steering is defined as "delivered after the current turn's tool calls", so with no active run
+ * there is nothing to steer — the message goes out as a normal prompt and we say so instead of
+ * silently pretending.
+ */
 const effectiveSteer = computed(() => steerMode.value && props.running);
 
 function submit(): void {
 	const value = text.value.trim();
 	if (!value) return;
-	emit(effectiveSteer.value ? "steer" : "prompt", value);
+	if (effectiveSteer.value) {
+		emit("steer", value);
+		emit("notice", "");
+	} else {
+		if (steerMode.value) emit("notice", "no active run — steer only applies mid-run, so this was sent as a normal prompt");
+		emit("prompt", value);
+	}
 	text.value = "";
 	grow();
 }
@@ -72,10 +89,13 @@ onMounted(grow);
 				<button v-else class="btn btn-sm btn-primary" :disabled="!text.trim()" @click="submit()">Send</button>
 			</div>
 			<div class="statusline">
-				<label class="row tiny" :class="{ faint: !props.running }">
-					<input v-model="steerMode" type="checkbox" :disabled="!props.running" />
+				<label class="row tiny" :title="props.running
+					? 'delivered after the current turn\'s tool calls, before the next LLM call'
+					: 'no active run: sending now goes out as a normal prompt'">
+					<input v-model="steerMode" type="checkbox" />
 					<span>steer current run</span>
 				</label>
+				<span v-if="steerMode && !props.running" class="tiny faint">no active run — will be sent as a normal prompt</span>
 				<span v-if="props.queueSteering" class="tiny">queued steering: {{ props.queueSteering }}</span>
 				<span v-if="props.queueFollowUp" class="tiny">queued follow-up: {{ props.queueFollowUp }}</span>
 				<span v-if="props.busyHint" class="tiny">{{ props.busyHint }}</span>

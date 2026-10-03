@@ -189,6 +189,7 @@ onMounted(() => {
 					@prompt="store.sendPrompt($event)"
 					@steer="store.steer($event)"
 					@abort="store.abort()"
+					@notice="store.notice = $event"
 				/>
 				<div style="padding: 0 20px 8px">
 					<StatusBar />
