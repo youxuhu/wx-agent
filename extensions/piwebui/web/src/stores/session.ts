@@ -16,6 +16,11 @@ import {
 	type CommandInfo,
 	type ConfigFile,
 	type ConnState,
+	type DirEntry,
+	type GitBranch,
+	type GitCommit,
+	type GitStatus,
+	type WorkspaceInfo,
 	type ForkPoint,
 	type ModelInfo,
 	type SessionStats,
@@ -95,6 +100,39 @@ export const useSessionStore = defineStore("session", {
 		shellRunning: false,
 		shellExcluded: true,
 		pendingSends: [] as Record<string, unknown>[],
+		reconnectAttempts: 0,
+		reconnectIn: null as number | null,
+
+		// --- workspaces -------------------------------------------------------
+		workspaces: [] as WorkspaceInfo[],
+		activeWorkspace: null as string | null,
+		recentWorkspaces: [] as string[],
+		showFolderPicker: false,
+		browsePath: "" as string,
+		browseParent: null as string | null,
+		browseEntries: [] as DirEntry[],
+		browseRoots: [] as Array<{ path: string; label: string }>,
+		browseError: "" as string,
+
+		// --- left sidebar -----------------------------------------------------
+		sidebar: "files" as "files" | "changes" | "history" | "branches" | "none",
+		treeChildren: {} as Record<string, DirEntry[]>,
+		treeExpanded: [] as string[],
+		fileView: null as null | { path: string; text: string; language: string | null; bytes: number },
+		fileError: "",
+		showIgnoredFiles: false,
+
+		// --- git --------------------------------------------------------------
+		gitStatus: null as GitStatus | null,
+		gitDiff: null as null | { path: string; staged: boolean; text: string; ok: boolean; error?: string },
+		gitLog: [] as GitCommit[],
+		gitBranches: [] as GitBranch[],
+		gitMessage: "" as string,
+		gitAmend: false,
+		gitBusy: false,
+		gitNotice: "",
+		gitShow: null as null | { ref: string; text: string },
+		gitConfirm: null as null | { kind: "discard"; paths: string[] },
 		speedSample: null as null | { output: number; at: number },
 		autoCompaction: null as boolean | null,
 		autoRetry: null as boolean | null,
@@ -110,6 +148,8 @@ export const useSessionStore = defineStore("session", {
 
 			socket.addEventListener("open", () => {
 				this.conn = "open";
+				this.reconnectAttempts = 0;
+				this.reconnectIn = null;
 				this.lastError = "";
 				// Anything requested while the socket was still connecting goes out now.
 				const queued = this.pendingSends;
@@ -123,9 +163,21 @@ export const useSessionStore = defineStore("session", {
 				// a reload must not lose the conversation: ask for the current messages
 				this.send({ type: "get_messages" });
 				this.send({ type: "get_commands" });
+				this.send({ type: "list_workspaces" });
 			});
 			socket.addEventListener("close", () => {
 				this.conn = "closed";
+				// Reconnect with backoff. Nothing is replayed: the socket reconnects, then the
+				// client re-hydrates from the service, so no prompt or approval is re-sent.
+				const delays = [1000, 2000, 4000, 8000, 15000];
+				const attempt = this.reconnectAttempts ?? 0;
+				this.reconnectAttempts = attempt + 1;
+				const delay = delays[Math.min(attempt, delays.length - 1)];
+				this.reconnectIn = Math.round(delay / 1000);
+				window.setTimeout(() => {
+					this.reconnectIn = null;
+					this.connect();
+				}, delay);
 			});
 			socket.addEventListener("error", () => {
 				this.conn = "error";
@@ -177,8 +229,23 @@ export const useSessionStore = defineStore("session", {
 
 		handle(payload: { type?: string; [key: string]: unknown }): void {
 			switch (payload.type) {
+				case "workspaces": {
+					this.workspaces = (payload.workspaces as WorkspaceInfo[] | undefined) ?? [];
+					this.activeWorkspace = (payload.active as string | null) ?? null;
+					this.recentWorkspaces = (payload.recent as string[] | undefined) ?? [];
+					this.cwd = this.activeWorkspace ?? this.cwd;
+					return;
+				}
+				case "notice": {
+					this.notice = String(payload.message ?? "");
+					return;
+				}
 				case "hello": {
 					this.cwd = String(payload.cwd ?? "");
+					this.workspaces = (payload.workspaces as WorkspaceInfo[] | undefined) ?? [];
+					this.activeWorkspace = (payload.active as string | null) ?? null;
+					this.recentWorkspaces = (payload.recent as string[] | undefined) ?? [];
+					if (this.activeWorkspace) this.cwd = this.activeWorkspace;
 					this.piState = String(payload.state ?? "unknown");
 					this.currentSessionPath = (payload.currentSessionPath as string | null) ?? null;
 					this.exitInfo = (payload.exitInfo as typeof this.exitInfo) ?? null;
@@ -421,6 +488,7 @@ export const useSessionStore = defineStore("session", {
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
 				this.send({ type: "get_commands" });
+				this.send({ type: "list_workspaces" });
 					this.send({ type: "list_sessions" });
 					return;
 				case "get_commands": {
@@ -473,6 +541,7 @@ export const useSessionStore = defineStore("session", {
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
 				this.send({ type: "get_commands" });
+				this.send({ type: "list_workspaces" });
 					this.send({ type: "list_sessions" });
 					return;
 				case "fork": {
@@ -483,6 +552,7 @@ export const useSessionStore = defineStore("session", {
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
 				this.send({ type: "get_commands" });
+				this.send({ type: "list_workspaces" });
 					this.send({ type: "list_sessions" });
 					return;
 				}
@@ -505,6 +575,7 @@ export const useSessionStore = defineStore("session", {
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
 				this.send({ type: "get_commands" });
+				this.send({ type: "list_workspaces" });
 					this.send({ type: "list_sessions" });
 					return;
 				default:
@@ -618,6 +689,213 @@ export const useSessionStore = defineStore("session", {
 
 		refreshContextUsage(): void {
 			this.send({ type: "get_session_stats" });
+		},
+
+		// ---- workspaces ------------------------------------------------------
+		refreshWorkspaces(): void {
+			this.send({ type: "list_workspaces" });
+		},
+		openFolder(path: string, activate = true): void {
+			this.send({ type: "open_workspace", path, activate });
+			if (activate) this.switchWorkspace(path);
+			this.showFolderPicker = false;
+		},
+		switchWorkspace(path: string): void {
+			this.send({ type: "switch_workspace", path });
+			// Per-workspace views are dropped; the service re-hydrates what it owns.
+			this.previewUrl = "";
+			this.picks = [];
+			this.treeChildren = {};
+			this.treeExpanded = [];
+			this.fileView = null;
+			this.fileError = "";
+			this.gitStatus = null;
+			this.gitDiff = null;
+			this.gitLog = [];
+			this.gitShow = null;
+			this.gitNotice = "";
+			this.messages = [];
+			this.tools = {};
+		},
+		closeWorkspace(path: string): void {
+			this.send({ type: "close_workspace", path });
+		},
+		openFolderPicker(): void {
+			this.showFolderPicker = true;
+			this.browseError = "";
+			if (!this.browsePath) this.browseTo("");
+		},
+		browseTo(path: string): void {
+			void fetch(`/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`)
+				.then((response) => response.json())
+				.then((data: { path?: string; parent?: string | null; entries?: DirEntry[]; roots?: Array<{ path: string; label: string }>; error?: string } | string) => {
+					if (typeof data === "string" || data.error) {
+						this.browseError = typeof data === "string" ? data : String(data.error);
+						return;
+					}
+					this.browsePath = data.path ?? "";
+					this.browseParent = data.parent ?? null;
+					this.browseEntries = data.entries ?? [];
+					this.browseRoots = data.roots ?? [];
+				})
+				.catch((error: unknown) => {
+					this.browseError = String(error);
+				});
+		},
+
+		// ---- left sidebar: files ---------------------------------------------
+		openSidebar(tab: "files" | "changes" | "history" | "branches"): void {
+			this.sidebar = this.sidebar === tab ? "none" : tab;
+			if (this.sidebar === "files") this.ensureTree(this.cwd);
+			if (this.sidebar === "changes") this.refreshGit();
+			if (this.sidebar === "history") this.loadLog();
+			if (this.sidebar === "branches") this.loadBranches();
+		},
+		ensureTree(dir: string): void {
+			if (this.treeChildren[dir]) return;
+			this.loadTree(dir);
+		},
+		loadTree(dir: string): void {
+			// The workspace path may not have arrived yet; a request without it would be refused.
+			if (!dir) return;
+			const query = `?dir=${encodeURIComponent(dir)}${this.showIgnoredFiles ? "&showIgnored=1" : ""}`;
+			void fetch(`/api/tree${query}`)
+				.then((response) => response.json())
+				.then((data: { dir?: string; root?: string; entries?: DirEntry[]; error?: string }) => {
+					if (data.error) {
+						this.fileError = String(data.error);
+						return;
+					}
+					this.treeChildren = { ...this.treeChildren, [data.dir ?? dir]: data.entries ?? [] };
+				})
+				.catch((error: unknown) => {
+					this.fileError = String(error);
+				});
+		},
+		reloadTree(): void {
+			this.treeChildren = {};
+			this.loadTree(this.cwd);
+		},
+		toggleDir(dir: string): void {
+			if (this.treeExpanded.includes(dir)) {
+				this.treeExpanded = this.treeExpanded.filter((path) => path !== dir);
+			} else {
+				this.treeExpanded = [...this.treeExpanded, dir];
+				this.ensureTree(dir);
+			}
+		},
+		openFileAt(path: string): void {
+			this.fileError = "";
+			this.fileView = null;
+			void fetch(`/api/file?path=${encodeURIComponent(path)}`)
+				.then((response) => response.json())
+				.then((data: { path?: string; text?: string; language?: string | null; bytes?: number; error?: string }) => {
+					if (data.error) {
+						this.fileError = String(data.error);
+						return;
+					}
+					this.fileView = { path: data.path ?? path, text: data.text ?? "", language: data.language ?? null, bytes: data.bytes ?? 0 };
+				})
+				.catch((error: unknown) => {
+					this.fileError = String(error);
+				});
+		},
+
+		// ---- git -------------------------------------------------------------
+		refreshGit(): void {
+			this.gitBusy = true;
+			void Promise.all([
+				fetch("/api/git/status").then((response) => response.json()),
+				fetch("/api/git/branches").then((response) => response.json()),
+			])
+				.then(([status, branches]: [GitStatus, { branches?: GitBranch[] }]) => {
+					this.gitStatus = status;
+					this.gitBranches = branches.branches ?? [];
+					this.gitBusy = false;
+				})
+				.catch((error: unknown) => {
+					this.gitBusy = false;
+					this.gitNotice = `git status failed: ${String(error)}`;
+				});
+		},
+		loadDiff(path: string, staged: boolean): void {
+			void fetch(`/api/git/diff?path=${encodeURIComponent(path)}${staged ? "&staged=1" : ""}`)
+				.then((response) => response.json())
+				.then((data: { ok?: boolean; stdout?: string; stderr?: string }) => {
+					this.gitDiff = { path, staged, text: data.stdout ?? "", ok: data.ok === true, error: data.ok ? undefined : data.stderr };
+				})
+				.catch((error: unknown) => {
+					this.gitDiff = { path, staged, text: "", ok: false, error: String(error) };
+				});
+		},
+		gitAction(action: string, body: Record<string, unknown>): void {
+			this.gitBusy = true;
+			this.gitNotice = "";
+			void fetch(`/api/git/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+				.then((response) => response.json())
+				.then((result: { ok?: boolean; verbatim?: string; snapshot?: { detail?: string } }) => {
+					this.gitBusy = false;
+					const detail = [result.verbatim, result.snapshot?.detail].filter(Boolean).join(" · ");
+					this.gitNotice = `${action}: ${result.ok ? "ok" : "refused"} — ${detail}`;
+					if (result.ok && action === "commit") this.gitMessage = "";
+					this.refreshGit();
+					this.loadLog();
+					if (this.gitDiff) this.loadDiff(this.gitDiff.path, this.gitDiff.staged);
+				})
+				.catch((error: unknown) => {
+					this.gitBusy = false;
+					this.gitNotice = `${action} failed: ${String(error)}`;
+				});
+		},
+		stagePaths(paths: string[]): void {
+			this.gitAction("stage", { paths });
+		},
+		unstagePaths(paths: string[]): void {
+			this.gitAction("unstage", { paths });
+		},
+		/** Discard is destructive: it needs a confirmation step, and the service snapshots first. */
+		requestDiscard(paths: string[]): void {
+			this.gitConfirm = { kind: "discard", paths };
+		},
+		confirmDiscard(): void {
+			const paths = this.gitConfirm?.paths ?? [];
+			this.gitConfirm = null;
+			this.gitAction("discard", { paths, confirmed: true });
+		},
+		commitGit(): void {
+			this.gitAction("commit", { message: this.gitMessage, amend: this.gitAmend });
+		},
+		checkoutBranch(branch: string): void {
+			this.gitAction("checkout", { branch });
+		},
+		createGitBranch(name: string): void {
+			this.gitAction("branch", { name });
+		},
+		loadLog(): void {
+			void fetch("/api/git/log?limit=100")
+				.then((response) => response.json())
+				.then((data: { commits?: GitCommit[] }) => {
+					this.gitLog = data.commits ?? [];
+				})
+				.catch(() => undefined);
+		},
+		loadBranches(): void {
+			void fetch("/api/git/branches")
+				.then((response) => response.json())
+				.then((data: { branches?: GitBranch[] }) => {
+					this.gitBranches = data.branches ?? [];
+				})
+				.catch(() => undefined);
+		},
+		showCommit(ref: string): void {
+			void fetch(`/api/git/show?ref=${encodeURIComponent(ref)}`)
+				.then((response) => response.json())
+				.then((data: { ok?: boolean; stdout?: string; stderr?: string }) => {
+					this.gitShow = { ref, text: data.ok ? (data.stdout ?? "") : `failed: ${data.stderr ?? "unknown"}` };
+				})
+				.catch((error: unknown) => {
+					this.gitShow = { ref, text: `failed: ${String(error)}` };
+				});
 		},
 
 		requestPreview(): void {

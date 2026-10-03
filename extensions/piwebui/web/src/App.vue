@@ -4,12 +4,14 @@
  * Facts only — every badge shows what the service reported.
  */
 import { onMounted } from "vue";
-import { Badge, Button, Space, Tag } from "@pixelium/web-vue";
+import { Badge, Button, Space, Tag, Tooltip } from "@pixelium/web-vue";
 import MessageList from "./components/MessageList.vue";
 import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
 import PreviewPanel from "./components/PreviewPanel.vue";
 import ControlDrawer from "./components/ControlDrawer.vue";
+import SideBar from "./components/SideBar.vue";
+import FolderPicker from "./components/FolderPicker.vue";
 import StatusBar from "./components/StatusBar.vue";
 import { useSessionStore } from "./stores/session.ts";
 
@@ -28,7 +30,18 @@ onMounted(() => {
 			<Tag :theme="store.conn === 'open' ? 'success' : store.conn === 'connecting' ? 'warning' : 'danger'">{{ store.conn }}</Tag>
 			<Tag :theme="store.piState === 'running' ? 'success' : 'notice'">pi:{{ store.piState }}</Tag>
 			<Tag v-if="store.running" theme="warning">running</Tag>
-			<span class="dim ellipsis">{{ store.cwd }}</span>
+			<Tooltip content="open / switch workspace (one writer at a time)">
+				<Button size="small" variant="outline" @click="store.openFolderPicker()">folder · {{ store.cwd }}</Button>
+			</Tooltip>
+			<Button
+				v-for="tab in (['files', 'changes', 'history', 'branches'] as const)"
+				:key="tab"
+				size="small"
+				:variant="store.sidebar === tab ? 'primary' : 'text'"
+				@click="store.openSidebar(tab)"
+			>
+				{{ tab }}
+			</Button>
 			<Space class="head-right">
 				<Badge v-if="store.pendingUi.length" theme="danger">{{ store.pendingUi.length }} approval{{ store.pendingUi.length > 1 ? "s" : "" }}</Badge>
 				<Tag v-if="store.sessionName" theme="notice">{{ store.sessionName }}</Tag>
@@ -37,10 +50,13 @@ onMounted(() => {
 			</Space>
 		</header>
 
-		<main class="main" :class="{ split: store.showPreview }">
-			<MessageList class="pane" :messages="store.messages" :tools="store.tools" />
-			<PreviewPanel v-if="store.showPreview" class="pane" />
-		</main>
+		<div class="body">
+			<SideBar v-if="store.sidebar !== 'none'" class="side" />
+			<main class="main" :class="{ split: store.showPreview }">
+				<MessageList class="pane" :messages="store.messages" :tools="store.tools" />
+				<PreviewPanel v-if="store.showPreview" class="pane" />
+			</main>
+		</div>
 
 		<footer v-if="store.retry" class="err">
 			<Tag theme="warning">retry {{ store.retry.attempt }}/{{ store.retry.max }}</Tag>
@@ -77,6 +93,7 @@ onMounted(() => {
 		/>
 
 		<ControlDrawer />
+		<FolderPicker />
 	</div>
 </template>
 
@@ -101,6 +118,18 @@ onMounted(() => {
 
 .head-right {
 	margin-left: auto;
+}
+
+.body {
+	display: flex;
+	flex: 1;
+	gap: 10px;
+	min-height: 0;
+}
+
+.side {
+	width: 320px;
+	flex: 0 0 auto;
 }
 
 .main {

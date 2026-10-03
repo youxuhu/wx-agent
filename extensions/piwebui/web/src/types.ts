@@ -191,3 +191,67 @@ export interface ForkPoint {
 	text?: string;
 	timestamp?: number;
 }
+
+/** Workspaces (one pi child per directory; exactly one is the active writer). */
+export interface WorkspaceInfo {
+	path: string;
+	active: boolean;
+	exists: boolean;
+	state: string;
+	sessionPath: string | null;
+	pendingUi: number;
+	previewState: string;
+	previewPort: number | null;
+	isRepo: boolean;
+}
+
+/** File tree / folder picker. */
+export interface DirEntry {
+	name: string;
+	path: string;
+	type: "dir" | "file" | "symlink" | "other";
+	size: number;
+	mtimeMs: number;
+	ignored?: boolean;
+}
+
+/** Git panel payloads (server/git.ts). */
+export interface GitEntry {
+	path: string;
+	index: string;
+	worktree: string;
+	kind: "changed" | "renamed" | "unmerged" | "untracked" | "ignored";
+	origPath?: string;
+	staged: boolean;
+	unstaged: boolean;
+	untracked: boolean;
+	conflicted: boolean;
+}
+
+export interface GitStatus {
+	repo: boolean;
+	root: string | null;
+	branch: string | null;
+	upstream: string | null;
+	ahead: number;
+	behind: number;
+	entries: GitEntry[];
+	error?: string;
+}
+
+export interface GitBranch {
+	name: string;
+	sha: string;
+	date: string;
+	upstream: string;
+	remote: boolean;
+}
+
+export interface GitCommit {
+	hash: string;
+	short: string;
+	author: string;
+	date: string;
+	subject: string;
+	refs: string;
+}

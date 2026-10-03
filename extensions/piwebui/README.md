@@ -60,6 +60,39 @@ cwd 先做 realpath，故 `/tmp` 落到 `--private-tmp--`）。列表包含：�
 - **invariant**：只允许切换到**当前 cwd 会话目录内**的 `.jsonl`；其他路径一律拒绝并报事实。
 - 界面：标题栏 `sessions` 按钮打开抽屉，行内显示 `current` / `switch`、时间、条数、大小与首句。
 
+## 工作目录（多 workspace）
+
+标题栏上的 `folder · <路径>` 按钮 → 打开文件夹对话框：
+
+- **浏览**：`/api/fs` 只列目录（+ 符号链接），且只允许 `$HOME` 与 `/tmp` 两个根内（越界拒绝并说明）；也可以直接粘贴绝对路径。
+- **打开/切换**：`open_workspace` / `switch_workspace` / `close_workspace`（WS）。每个 workspace 有**自己的 `pi --mode rpc` 子进程**（cwd = 该目录），因此会话列表、preview 配置、git 状态都随目录走。
+- **单写者 invariant**：同一时刻只有一个 workspace 是 `active`，只有它能接 `prompt` / `bash` / `set_*` / 会话切换等写操作；其它 workspace 的子进程保留、**只读观察**（发写命令会被拒绝并报出当前 active 是谁）。切走时未决审批仍留在原 workspace，对话框里显示其数量。
+- 最近打开列表存在 `<agentDir>/piwebui-workspaces.json`。
+- 启动参数仍是 `--cwd`（默认工作目录）；也可以 `?dir=<绝对路径>` 让某个标签页直接开在指定目录。
+
+## 左侧栏：files / changes / history / branches
+
+标题栏或侧栏顶部切换，可折叠（再点一次收起）。
+
+| 页 | 内容 | 端点 |
+| --- | --- | --- |
+| `files` | 只读项目树（懒加载子目录、`.gitignore` 项默认隐藏可切换显示、`.git` 不展开）、git 状态字母、点击文件看内容（文本，带语言提示） | `GET /api/tree` `GET /api/file` |
+| `changes` | 分支 + ahead/behind、暂存/未暂存/未跟踪三组、逐文件 `stage`/`unstage`/`discard`、diff（行级着色）、commit（只提交已暂存，`amend` 需单独开关） | `GET /api/git/status\|diff\|numstat`、`POST /api/git/stage\|unstage\|discard\|commit` |
+| `history` | 提交列表（hash / subject / ref 标签 / 时间），点一条看完整 `git show`（含 `--stat`） | `GET /api/git/log` `GET /api/git/show` |
+| `branches` | 本地/远程分支、当前分支、切换、新建并切换 | `GET /api/git/branches`、`POST /api/git/checkout\|branch` |
+
+**文件面板这轮只读**：没有写文件的代码路径（预览走同一套只读 API）。
+
+### Git 红线（代码强制，做到或明确报不支持）
+
+1. **没有 force-push / merge / reset --hard / clean -fd / rebase 的 argv 路径**（probe 会静态扫源码断言）；
+2. push 与 PR 本轮**未实现**（连按钮都没有）；
+3. **discard 必须先确认**（对话框）且服务**先落快照** `refs/piwebui/<时间戳>`，快照 ref 会作为事实回传（探针会 `git rev-parse --verify` 复核它真的存在）；未跟踪文件**拒绝**丢弃（删未跟踪文件等于 `git clean`，无此代码路径）；
+4. 切分支时工作树脏 → **拒绝**并列出脏文件；
+5. 前端**不能传 argv**：每个动作在 `server/git.ts` 里拼参数；路径一律先 realpath 包含校验（越界拒绝）；
+6. git 读操作 `GIT_OPTIONAL_LOCKS=0`（不写 index）、`GIT_TERMINAL_PROMPT=0`（不阻塞要凭据）、15s 超时；写操作按仓库**串行**；
+7. 失败/冲突原文回传，不重试、不假装成功；冲突文件以 `UU` 状态如实展示（本轮不提供 ours/theirs 解决）。
+
 ## 状态栏（把终端页脚搬到浏览器）
 
 底部一行复刻终端页脚的信息，全部来自真实上报：
@@ -170,12 +203,23 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 ## 验收
 
+五个探针，共 **79 项**（都需要服务在对应端口运行）：
+
+| probe | 覆盖 | 结果 |
+| --- | --- | --- |
+| `preview-probe.ts`（:7801） | 代理拒绝/就绪判定/HTML·CSS 改写/脚本注入/CSP 事实/JS 透传/`/__file/` 只读与越界/停后进程组消失 | 17/17 |
+| `control-probe.ts`（:7801） | 命令枚举与执行、模型/思考等级、设置往返、统计/树/fork/最后助手文本、`bash` 真执行 + 流式、未知命令与缺字段拒绝、配置白名单/校验/原子写 | 21/21 |
+| `workspace-probe.ts`（:7799，需干净注册表） | 注册表增删、realpath 归一、**非 active 写操作被拒**、切换后读操作跟随、按 workspace 列会话、close 清理 | 9/9 |
+| `files-probe.ts`（:7799） | 树列出/`.git` 不展开/ignored 标记/子目录按需、越界 403、`..` 403、软链出界 403、超大与二进制拒绝、目录选择器只列目录 | 13/13 |
+| `git-probe.ts`（:7799，临时仓库） | 状态分类、diff/numstat、stage/commit/log、建分支、脏树切分支拒绝、未知分支拒绝、discard 需确认 + 快照 ref 真实存在、未跟踪不可丢、越界拒绝、冲突 `UU` 识别、无危险 argv | 19/19 |
+
 `node probe/preview-probe.ts`（需先按上面用法起服务）会真实起一个 dev server 并核对：无上游时拒绝、就绪判定、HTML/CSS 改写与脚本注入、CSP 放宽事实、JS 透传、`/__file/` 只读与越界拒绝、`stop` 后进程组确实消失。当前 **17/17 通过**。
 
 ## 已知限制
 
 - 代理只转发 HTTP：**dev server 的 WebSocket / HMR 通道没有转发**（页面能用，热更新不生效）；需要热更新请直接用浏览器打开 dev server。
 - 同一时刻只允许一个 dev server（我们只管理自己起的那一个）。
+- 文件面板只读；git 面板不做 push / PR / 交互式 rebase；冲突只展示不解决。
 - "单写者"（多标签页同时驱动同一个 RPC 子进程）尚未按标签页隔离，当前所有标签页都能发命令。
 
 - 前端依赖 `@pixelium/web-vue@0.2.1-delta`（预发布版本号）。
