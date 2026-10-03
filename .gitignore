@@ -1,4 +1,14 @@
-*
-!extensions/
-!extensions/computer-use/
+# machine-local / heavy data — never sync
+sessions/
+npm/
+web-search-cache/
+missions/
+bin/
+# secrets — copy manually or re-login, never commit
+auth.json*
+# transient backups
+*.bak*
+# v3.1: track only extensions/computer-use (everything else machine-local)
+extensions/*
+!extensions/computer-use
 extensions/computer-use/node_modules/
