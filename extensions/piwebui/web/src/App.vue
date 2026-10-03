@@ -28,8 +28,6 @@ onMounted(() => store.connect());
 				<Badge v-if="store.pendingUi.length" theme="danger">{{ store.pendingUi.length }} approval{{ store.pendingUi.length > 1 ? "s" : "" }}</Badge>
 				<Tag v-if="store.sessionName" theme="notice">{{ store.sessionName }}</Tag>
 				<Button size="small" variant="text" @click="store.showSessions = true">sessions</Button>
-				<Button size="small" variant="text" @click="store.newSession()">new session</Button>
-				<Button size="small" variant="text" @click="store.compact()">compact</Button>
 			</Space>
 		</header>
 

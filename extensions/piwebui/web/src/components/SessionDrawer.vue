@@ -40,6 +40,7 @@ function rename(): void {
 			<Space>
 				<Button size="small" @click="store.newSession()">new session</Button>
 				<Button size="small" variant="outline" @click="store.listSessions()">refresh</Button>
+				<Button size="small" variant="outline" @click="store.compact()">compact</Button>
 				<span class="dim">{{ rows.length }} in {{ store.cwd }}</span>
 			</Space>
 
