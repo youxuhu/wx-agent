@@ -1,0 +1,28 @@
+{
+  "name": "research",
+  "goal": "",
+  "steps": [
+    {
+      "id": "research",
+      "role": "researcher",
+      "title": "research",
+      "worktree": false,
+      "parallel": true,
+      "taskTemplate": "Research the external side of this goal with sources.\n\nGoal: {{goal}}\n\nProduce a research brief: each claim with its source, and explicitly separate what is established from what is uncertain. Include version numbers and dates where they matter."
+    },
+    {
+      "id": "explore",
+      "role": "scout",
+      "title": "explore",
+      "worktree": false,
+      "parallel": true,
+      "taskTemplate": "Recon the local project side of this goal.\n\nGoal: {{goal}}\n\nReport as facts: relevant files with paths, current structure and conventions, entry points, dependencies with versions, and risks. Do not edit files and do not rely on external knowledge."
+    },
+    {
+      "id": "advisor",
+      "role": "oracle",
+      "title": "advisor",
+      "taskTemplate": "Give a second opinion on this goal using the two inputs below.\n\nGoal: {{goal}}\n\nInputs (external research + local recon):\n{{upstream}}\n\nChallenge the assumptions: where do the external facts and the local reality conflict? What is untested, unstated, or risky? Do not edit files; state the conclusion and its confidence."
+    }
+  ]
+}

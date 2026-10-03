@@ -1,0 +1,24 @@
+{
+  "name": "review-loop",
+  "goal": "",
+  "steps": [
+    {
+      "id": "build",
+      "role": "worker",
+      "title": "build",
+      "taskTemplate": "Implement the change.\n\nGoal: {{goal}}\n\nEdit files, run the project's own validation, and report exactly what changed, how it was verified, and what remains unverified."
+    },
+    {
+      "id": "review",
+      "role": "reviewer",
+      "title": "review",
+      "taskTemplate": "Review the change above against the goal and the repository.\n\nGoal: {{goal}}\n\nChange report:\n{{upstream}}\n\nVerify claims yourself: read the files, run the tests you can run. Report blocking issues with file:line evidence, then non-blocking observations."
+    },
+    {
+      "id": "advisor",
+      "role": "oracle",
+      "title": "advisor",
+      "taskTemplate": "Adjudicate the review findings below. Do not edit files.\n\nGoal: {{goal}}\n\nBuild report and review findings:\n{{upstream}}\n\nFor each blocking issue: is it real, and what is the minimal correct fix direction? State which findings should be rejected, with reasons. Mark anything you could not verify."
+    }
+  ]
+}

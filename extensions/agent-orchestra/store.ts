@@ -3,9 +3,53 @@
  * and <repo>/.pi/orchestrations/*.json (project-level, when cwd is a git repo).
  */
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { parsePipeline, type Pipeline } from "./model.ts";
+
+/**
+ * Builtin templates shipped inside the extension directory (read-only baseline).
+ * Resolution is defensive: `import.meta.url` is not always available after a
+ * CJS transform, so the canonical user-extension location is the fallback.
+ */
+export function templateDirs(): string[] {
+	const dirs: string[] = [];
+	const envDir = process.env.PI_ORCHESTRA_TEMPLATES;
+	if (envDir) dirs.push(envDir);
+	try {
+		const metaUrl = import.meta?.url;
+		if (typeof metaUrl === "string" && metaUrl) dirs.push(join(dirname(fileURLToPath(metaUrl)), "templates"));
+	} catch {
+		/* import.meta unavailable in this transform — use the fallbacks below */
+	}
+	dirs.push(join(homedir(), ".pi", "agent", "extensions", "agent-orchestra", "templates"));
+	return [...new Set(dirs)];
+}
+
+export function templateDir(): string {
+	const dirs = templateDirs();
+	for (const d of dirs) if (existsSync(d)) return d;
+	return dirs[dirs.length - 1];
+}
+
+export function listTemplates(): string[] {
+	const names = new Set<string>();
+	for (const dir of templateDirs()) {
+		if (!existsSync(dir)) continue;
+		for (const f of readdirSync(dir)) if (f.endsWith(".json")) names.add(f.slice(0, -5));
+	}
+	return [...names].sort();
+}
+
+export function loadTemplate(name: string): Pipeline | null {
+	const safe = name.replace(/[^\w.-]/g, "_");
+	for (const dir of templateDirs()) {
+		const path = join(dir, `${safe}.json`);
+		if (existsSync(path)) return parsePipeline(JSON.parse(readFileSync(path, "utf8")));
+	}
+	return null;
+}
 
 export function globalDir(): string {
 	return join(homedir(), ".pi", "agent", "orchestrations");
@@ -22,8 +66,8 @@ export function projectDir(cwd: string): string | null {
 	return null;
 }
 
-export function listPipelines(cwd: string): { name: string; scope: "global" | "project" }[] {
-	const out: { name: string; scope: "global" | "project" }[] = [];
+export function listPipelines(cwd: string): { name: string; scope: "global" | "project" | "template" }[] {
+	const out: { name: string; scope: "global" | "project" | "template" }[] = [];
 	const scan = (dir: string, scope: "global" | "project") => {
 		if (!existsSync(dir)) return;
 		for (const f of readdirSync(dir)) {
@@ -33,6 +77,9 @@ export function listPipelines(cwd: string): { name: string; scope: "global" | "p
 	scan(globalDir(), "global");
 	const pd = projectDir(cwd);
 	if (pd) scan(pd, "project");
+	for (const t of listTemplates()) {
+		if (!out.some((e) => e.name === t)) out.push({ name: t, scope: "template" });
+	}
 	return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -47,7 +94,7 @@ function pathFor(name: string, cwd: string): { path: string; scope: "global" | "
 
 export function loadPipeline(name: string, cwd: string): Pipeline | null {
 	const hit = pathFor(name, cwd);
-	if (!hit) return null;
+	if (!hit) return loadTemplate(name); // templates are the last fallback
 	return parsePipeline(JSON.parse(readFileSync(hit.path, "utf8")));
 }
 

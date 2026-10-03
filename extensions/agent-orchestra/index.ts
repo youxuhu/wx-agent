@@ -8,7 +8,7 @@
  * Red lines: data + UI only. No strategy is fixed here; prompts are pure facts.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { defaultPipeline, newStep, type Pipeline } from "./model.ts";
+import { defaultPipeline, GOAL_TOKEN, newStep, type Pipeline } from "./model.ts";
 import { listPipelines, loadPipeline, savePipeline } from "./store.ts";
 import { palette } from "./roles.ts";
 import { OrchestraRunner, type StepRun } from "./runner.ts";
@@ -58,9 +58,10 @@ export default function (pi: ExtensionAPI) {
 			} else if (session.pipeline.steps.length === 0) {
 				const existing = listPipelines(ctx.cwd);
 				if (existing.length > 0) {
-					const picked = await ctx.ui.select("Load pipeline", existing.map((e) => `${e.name} (${e.scope})`));
+					const labels = existing.map((e) => `${e.name} (${e.scope})`);
+					const picked = await ctx.ui.select("Load pipeline or template", labels);
 					if (picked) {
-						const name = picked.replace(/ \((global|project)\)$/, "");
+						const name = picked.replace(/ \((global|project|template)\)$/, "");
 						session.pipeline = loadPipeline(name, ctx.cwd) ?? session.pipeline;
 					}
 				}
@@ -96,6 +97,11 @@ export default function (pi: ExtensionAPI) {
 					if (title !== undefined && title.trim()) step.title = title.trim();
 					const task = await ctx.ui.editor(`Task for [${step.title}] — ${"{{upstream}}"} injects the previous step's output`, step.taskTemplate);
 					if (task !== undefined) step.taskTemplate = task;
+					continue;
+				}
+				if (action.action === "edit-goal") {
+					const goal = await ctx.ui.editor("Pipeline goal ({{goal}} in task templates)", session.pipeline.goal ?? "");
+					if (goal !== undefined) session.pipeline.goal = goal;
 					continue;
 				}
 				if (action.action === "run" || action.action === "run-step") {
@@ -138,6 +144,12 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify("orchestra: lane is empty", "warning");
 			return;
 		}
+		// a task template that uses {{goal}} needs a goal before anything is spawned (factual prompt, no strategy)
+		if (!session.pipeline.goal?.trim() && session.pipeline.steps.some((s) => s.taskTemplate.includes(GOAL_TOKEN))) {
+			const goal = await ctx.ui.input("Pipeline goal", "what should this pipeline achieve?");
+			if (goal === undefined) return;
+			session.pipeline.goal = goal;
+		}
 		session.runner ??= new OrchestraRunner(pi);
 		const runner = session.runner;
 		try {
@@ -154,7 +166,7 @@ export default function (pi: ExtensionAPI) {
 		};
 
 		const chainPromise = (onlyStepId
-			? runner.runStep(session.pipeline.steps.find((s) => s.id === onlyStepId) ?? newStep("worker", "worker"), null, hooks)
+			? runner.runStep(session.pipeline.steps.find((s) => s.id === onlyStepId) ?? newStep("worker", "worker"), null, hooks, undefined, session.pipeline.goal)
 			: runner.runChain(session.pipeline, hooks)
 		)
 			.catch((e) => ctx.ui.notify(e instanceof Error ? e.message : String(e), "error"))

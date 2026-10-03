@@ -21,10 +21,13 @@ export interface Step {
 
 export interface Pipeline {
 	name: string;
+	/** free-form goal text; {{goal}} in task templates is replaced with it */
+	goal?: string;
 	steps: Step[];
 }
 
 const UPSTREAM_TOKEN = "{{upstream}}";
+export const GOAL_TOKEN = "{{goal}}";
 
 export function newId(): string {
 	return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -35,7 +38,7 @@ export function newStep(role: string, title: string): Step {
 }
 
 export function defaultPipeline(): Pipeline {
-	return { name: `pipeline-${new Date().toISOString().slice(0, 10)}`, steps: [] };
+	return { name: `pipeline-${new Date().toISOString().slice(0, 10)}`, goal: "", steps: [] };
 }
 
 /** Validate & normalize parsed JSON. Throws with a factual message on bad shape. */
@@ -62,20 +65,28 @@ export function parsePipeline(data: unknown): Pipeline {
 					: undefined,
 		};
 	});
-	return { name: o.name, steps };
+	return { name: o.name, goal: typeof o.goal === "string" ? o.goal : undefined, steps };
 }
 
 /**
- * Build the concrete task text for a step given the upstream output.
- * Placeholder is replaced when present; otherwise the upstream section is appended.
+ * Build the concrete task text for a step given the pipeline goal and upstream output.
+ * Placeholders are replaced when present; otherwise the upstream section is appended.
  * Output is truncated to `maxUpstreamChars` with a factual marker (never silently).
  */
-export function buildTask(step: Step, upstream: string | null, maxUpstreamChars = 8000): string {
-	if (!upstream) return renderTemplate(step.taskTemplate, null);
+export function buildTask(step: Step, upstream: string | null, goal = "", maxUpstreamChars = 8000): string {
+	const body = renderGoal(step.taskTemplate, goal);
+	if (!upstream) return renderTemplate(body, null);
 	const trimmed = upstream.length > maxUpstreamChars
 		? `${upstream.slice(0, maxUpstreamChars)}\n...[upstream truncated at ${maxUpstreamChars} chars]`
 		: upstream;
-	return renderTemplate(step.taskTemplate, trimmed);
+	return renderTemplate(body, trimmed);
+}
+
+/** Replace {{goal}}; drop the token with a factual note when no goal is set. */
+function renderGoal(tpl: string, goal: string): string {
+	const text = goal.trim();
+	if (!tpl.includes(GOAL_TOKEN)) return text ? `${tpl}` : tpl;
+	return tpl.split(GOAL_TOKEN).join(text || "(no goal set)");
 }
 
 function renderTemplate(tpl: string, upstream: string | null): string {

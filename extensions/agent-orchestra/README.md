@@ -21,6 +21,7 @@ downstream task.
 | ← / → | reorder step | — |
 | a | add step (role palette) | — |
 | e | edit title + task template | — |
+| g | edit pipeline goal | — |
 | d | delete step | — |
 | w | toggle worktree isolation | — |
 | space | run single step | — |
@@ -53,6 +54,29 @@ Aliases: `~/.pi/agent/orchestrations/roles.json` → `{"alias": "agentName"}`.
 upstream output is appended as a section. Parallel steps (`parallel: true`)
 run together with the previous step; their outputs are concatenated before
 being carried downstream.
+
+## Templates
+
+Builtin templates ship with the extension (`templates/*.json`, read-only baseline).
+They go through the same validation as user pipelines and can be saved as an
+editable copy with `^S`.
+
+| Template | Steps | Use for |
+|---|---|---|
+| `coding` | explore → build → review | normal code change: recon, implement, independent review |
+| `computeruse` | explore → computeruser → review | desktop GUI automation (computeruse preset carries the computer-use skill) |
+| `research` | research ∥ explore → advisor | project investigation: external sources + local recon + risk opinion |
+| `review-loop` | build → review → advisor | an existing change that needs more eyes |
+| `quick-fix` | build | one small change, shortest path |
+
+`/orchestra` with no argument lists saved pipelines **and** templates
+(`name (template)`); `/orchestra <name>` resolves project → global → template.
+
+Resolution order for templates: `PI_ORCHESTRA_TEMPLATES` env → directory next to
+the extension source → `~/.pi/agent/extensions/agent-orchestra/templates`.
+
+Tasks use two placeholders: `{{goal}}` (pipeline goal, prompted once before the
+run when missing) and `{{upstream}}` (previous step output).
 
 ## Persistence
 

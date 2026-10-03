@@ -7,7 +7,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Pipeline, Step } from "../model.ts";
-import { UPSTREAM_PLACEHOLDER } from "../model.ts";
+import { GOAL_TOKEN, UPSTREAM_PLACEHOLDER } from "../model.ts";
 import type { PaletteEntry } from "../roles.ts";
 import type { StepRun } from "../runner.ts";
 
@@ -16,6 +16,7 @@ export type ScreenAction =
 	| { action: "run" }
 	| { action: "run-step"; stepId: string }
 	| { action: "edit-step"; stepId: string }
+	| { action: "edit-goal" }
 	| { action: "steer"; stepId: string }
 	| { action: "stop-step"; stepId: string }
 	| { action: "save" };
@@ -135,6 +136,8 @@ export class LaneScreen implements Component {
 				sel.worktree = !sel.worktree;
 			} else if (data === "e" && sel) {
 				this.finish({ action: "edit-step", stepId: sel.id });
+			} else if (data === "g") {
+				this.finish({ action: "edit-goal" });
 			} else if (matchesKey(data, Key.enter) || matchesKey(data, Key.return)) {
 				this.finish({ action: "run" });
 			} else if (matchesKey(data, Key.space) && sel) {
@@ -155,6 +158,9 @@ export class LaneScreen implements Component {
 		const cut = (s: string) => truncateToWidth(s, Math.max(20, width - 1));
 		const title = this.pipeline.name || "pipeline";
 		L.push(cut(this.c("toolTitle", `─ orchestra · ${title} · ${this.mode} mode `).padEnd(width, "─")));
+		const goal = this.pipeline.goal?.trim();
+		const needsGoal = this.pipeline.steps.some((s) => s.taskTemplate.includes(GOAL_TOKEN));
+		L.push(cut(`  ${this.c("muted", "goal: ")}${this.c(goal ? "text" : needsGoal ? "warning" : "muted", goal || (needsGoal ? "(required — press g)" : "(not set — press g)"))}`));
 		const steps = this.pipeline.steps;
 		if (steps.length === 0) {
 			L.push(cut(this.c("muted", "  (empty lane — press a to add a role)")));
@@ -194,7 +200,7 @@ export class LaneScreen implements Component {
 
 		const hints =
 			this.mode === "edit"
-				? "↑↓ select  ←→ reorder  a add  e task  d del  w worktree  ⏎ run chain  space run step  ^S save  esc close"
+				? "↑↓ select  ←→ reorder  a add  e task  g goal  d del  w worktree  ⏎ run chain  space run step  ^S save  esc close"
 				: "↑↓ select  s steer  x stop  esc/⏎ close";
 		L.push(cut(this.c("muted", hints)));
 		return L;

@@ -1,0 +1,24 @@
+{
+  "name": "coding",
+  "goal": "",
+  "steps": [
+    {
+      "id": "explore",
+      "role": "scout",
+      "title": "explore",
+      "taskTemplate": "Recon the codebase for this task.\n\nGoal: {{goal}}\n\nReport as facts: relevant files with paths, entry points, data flow, existing tests, and risks. Do not edit files."
+    },
+    {
+      "id": "build",
+      "role": "worker",
+      "title": "build",
+      "taskTemplate": "Implement the goal.\n\nGoal: {{goal}}\n\nRecon findings:\n{{upstream}}\n\nEdit files, run the project's own validation, and report what changed, what was verified, and what stayed unverified."
+    },
+    {
+      "id": "review",
+      "role": "reviewer",
+      "title": "review",
+      "taskTemplate": "Review the implementation above against the goal.\n\nGoal: {{goal}}\n\nCheck correctness, tests, edge cases, and unnecessary complexity. Report blocking issues with file:line evidence and non-blocking observations separately. You are a fresh context: verify claims against the repository yourself.\n\nImplementation report:\n{{upstream}}"
+    }
+  ]
+}

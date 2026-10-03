@@ -1,0 +1,24 @@
+{
+  "name": "computeruse",
+  "goal": "",
+  "steps": [
+    {
+      "id": "explore",
+      "role": "scout",
+      "title": "explore",
+      "taskTemplate": "Gather facts about the target environment for this GUI task.\n\nGoal: {{goal}}\n\nReport: which machine/display is in use, which app names are relevant (use the computer tool action \"list_apps\" to list installed apps as facts), the permission state (Accessibility / Screen Recording), and any known constraints. Do not click or type anything. Do not edit files."
+    },
+    {
+      "id": "computeruser",
+      "role": "worker",
+      "title": "computeruser",
+      "taskTemplate": "Perform the GUI task with the computer tool.\n\nGoal: {{goal}}\n\nEnvironment facts from recon:\n{{upstream}}\n\nWork step by step: observe first (tree/minimal), act once, then verify the screen state actually changed. typeText is IME-immune; use it for all text. If a localized display name fails to open, the activate error already inlines the installed-app list — match it and retry with the english name or bundleId. Report each action with its observed result."
+    },
+    {
+      "id": "review",
+      "role": "reviewer",
+      "title": "review",
+      "taskTemplate": "Audit the GUI run above against the goal.\n\nGoal: {{goal}}\n\nFacts to audit:\n{{upstream}}\n\nCheck: was the goal actually achieved or only attempted? Is every claimed state change backed by an observation after the action? Were any actions taken on the wrong window/app? Report unsupported claims as blocking issues."
+    }
+  ]
+}

@@ -209,7 +209,7 @@ export class OrchestraRunner {
 				batch.push(pipeline.steps[j]);
 				j++;
 			}
-			const outputs = await Promise.all(batch.map((step) => this.runStep(step, upstreamCarry.text, hooks, signal)));
+			const outputs = await Promise.all(batch.map((step) => this.runStep(step, upstreamCarry.text, hooks, signal, pipeline.goal)));
 			const texts = outputs.map((o) => o.output).filter((t): t is string => Boolean(t && t.trim()));
 			upstreamCarry.text = texts.length ? texts.join("\n\n") : null;
 			i = j;
@@ -217,11 +217,11 @@ export class OrchestraRunner {
 		return this.runs;
 	}
 
-	async runStep(step: Step, upstream: string | null, hooks: ChainHooks, signal?: AbortSignal): Promise<StepRun> {
+	async runStep(step: Step, upstream: string | null, hooks: ChainHooks, signal?: AbortSignal, goal = ""): Promise<StepRun> {
 		const run: StepRun = this.runs.get(step.id) ?? { state: "queued" };
 		this.runs.set(step.id, run);
 		if (run.state === "done" || run.state === "running") return run; // resume support: keep completed steps
-		const task = buildTask(step, upstream);
+		const task = buildTask(step, upstream, goal);
 		run.state = "running";
 		run.startedAt = Date.now();
 		run.error = undefined;

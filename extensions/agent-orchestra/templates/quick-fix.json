@@ -1,0 +1,12 @@
+{
+  "name": "quick-fix",
+  "goal": "",
+  "steps": [
+    {
+      "id": "build",
+      "role": "worker",
+      "title": "build",
+      "taskTemplate": "Make this small change.\n\nGoal: {{goal}}\n\nLocate what needs editing, make the minimal change, run the project's own validation, and report what changed and what you checked. Escalate instead of guessing if the goal is ambiguous."
+    }
+  ]
+}
