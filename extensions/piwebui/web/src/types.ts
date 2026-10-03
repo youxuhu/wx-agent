@@ -147,3 +147,47 @@ export interface PickRecord {
 	note: string;
 	payload: PickPayload;
 }
+
+/** Control surface (everything the TUI can do, driven over RPC). */
+export interface CommandInfo {
+	name: string;
+	description?: string;
+	source: "extension" | "prompt" | "skill" | string;
+	sourceInfo?: { path?: string; scope?: string; origin?: string };
+}
+
+export interface ModelInfo {
+	provider: string;
+	id: string;
+	name?: string;
+	[key: string]: unknown;
+}
+
+export interface ConfigFile {
+	name: string;
+	path: string;
+	exists: boolean;
+	bytes: number;
+	content: string;
+	error?: string;
+}
+
+export interface SessionStats {
+	sessionFile?: string;
+	sessionId?: string;
+	userMessages?: number;
+	assistantMessages?: number;
+	toolCalls?: number;
+	totalMessages?: number;
+	tokens?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+	cost?: number;
+	contextUsage?: { tokens?: number; percent?: number; [key: string]: unknown };
+	[key: string]: unknown;
+}
+
+export interface ForkPoint {
+	entryId: string;
+	preview?: string;
+	text?: string;
+	timestamp?: number;
+}

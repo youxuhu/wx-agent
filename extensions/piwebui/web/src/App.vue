@@ -10,6 +10,7 @@ import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
 import SessionDrawer from "./components/SessionDrawer.vue";
 import PreviewPanel from "./components/PreviewPanel.vue";
+import ControlDrawer from "./components/ControlDrawer.vue";
 import { useSessionStore } from "./stores/session.ts";
 
 const store = useSessionStore();
@@ -31,6 +32,7 @@ onMounted(() => {
 			<Space class="head-right">
 				<Badge v-if="store.pendingUi.length" theme="danger">{{ store.pendingUi.length }} approval{{ store.pendingUi.length > 1 ? "s" : "" }}</Badge>
 				<Tag v-if="store.sessionName" theme="notice">{{ store.sessionName }}</Tag>
+				<Button size="small" :variant="store.showControl ? 'primary' : 'text'" @click="store.openControl()">control</Button>
 				<Button size="small" :variant="store.showPreview ? 'primary' : 'text'" @click="store.showPreview = !store.showPreview">preview</Button>
 				<Button size="small" variant="text" @click="store.showSessions = true">sessions</Button>
 			</Space>
@@ -69,6 +71,7 @@ onMounted(() => {
 		/>
 
 		<SessionDrawer />
+		<ControlDrawer />
 	</div>
 </template>
 

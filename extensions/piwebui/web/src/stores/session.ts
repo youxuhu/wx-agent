@@ -13,7 +13,12 @@ import {
 	messageToBlocks,
 	messageToText,
 	type ChatMessage,
+	type CommandInfo,
+	type ConfigFile,
 	type ConnState,
+	type ForkPoint,
+	type ModelInfo,
+	type SessionStats,
 	type PickPayload,
 	type PickRecord,
 	type PreviewInfo,
@@ -64,6 +69,30 @@ export const useSessionStore = defineStore("session", {
 		composerDraft: "" as string,
 		composerSeq: 0,
 		previewFrameKey: 0,
+		// control surface
+		showControl: false,
+		controlTab: "commands" as string,
+		commands: [] as CommandInfo[],
+		models: [] as ModelInfo[],
+		thinkingLevels: [] as string[],
+		stats: null as SessionStats | null,
+		tree: [] as unknown[],
+		forkPoints: [] as ForkPoint[],
+		lastAssistantText: "" as string,
+		configFiles: [] as ConfigFile[],
+		configName: "" as string,
+		configDraft: "" as string,
+		configStatus: "" as string,
+		shellCommand: "" as string,
+		shellOutput: "" as string,
+		shellExitCode: null as number | null,
+		shellRunning: false,
+		shellExcluded: true,
+		pendingSends: [] as Record<string, unknown>[],
+		autoCompaction: null as boolean | null,
+		autoRetry: null as boolean | null,
+		steeringMode: "" as string,
+		followUpMode: "" as string,
 	}),
 
 	actions: {
@@ -74,6 +103,11 @@ export const useSessionStore = defineStore("session", {
 
 			socket.addEventListener("open", () => {
 				this.conn = "open";
+				this.lastError = "";
+				// Anything requested while the socket was still connecting goes out now.
+				const queued = this.pendingSends;
+				this.pendingSends = [];
+				for (const message of queued) this.send(message);
 				// hydrate: current session + the session list + dev server state
 				this.send({ type: "get_state" });
 				this.send({ type: "list_sessions" });
@@ -118,8 +152,16 @@ export const useSessionStore = defineStore("session", {
 
 		send(message: Record<string, unknown>): void {
 			const socket = (this as unknown as { socket?: WebSocket }).socket;
-			if (socket?.readyState === 1) socket.send(JSON.stringify(message));
-			else this.lastError = "not connected to the local service";
+			if (socket?.readyState === 1) {
+				socket.send(JSON.stringify(message));
+				return;
+			}
+			// Still connecting: hold the request instead of reporting a failure that isn't one.
+			if (socket?.readyState === 0) {
+				this.pendingSends = [...this.pendingSends, message].slice(-50);
+				return;
+			}
+			this.lastError = "not connected to the local service";
 		},
 
 		handle(payload: { type?: string; [key: string]: unknown }): void {
@@ -273,6 +315,11 @@ export const useSessionStore = defineStore("session", {
 					this.retry = null;
 					if (record.success === false) this.lastError = `retries exhausted: ${String(record.finalError ?? "")}`;
 					return;
+				case "bash_execution_update": {
+					const delta = String(record.delta ?? "");
+					if (delta) this.shellOutput += delta;
+					return;
+				}
 				case "session_info_changed":
 					this.send({ type: "get_state" });
 					return;
@@ -324,6 +371,9 @@ export const useSessionStore = defineStore("session", {
 					const model = data.model as { provider?: string; id?: string } | undefined;
 					if (model) this.model = [model.provider, model.id].filter(Boolean).join("/");
 					this.thinkingLevel = String(data.thinkingLevel ?? "");
+					this.autoCompaction = typeof data.autoCompactionEnabled === "boolean" ? data.autoCompactionEnabled : this.autoCompaction;
+					this.steeringMode = String(data.steeringMode ?? this.steeringMode);
+					this.followUpMode = String(data.followUpMode ?? this.followUpMode);
 					return;
 				}
 				case "get_messages": {
@@ -338,6 +388,73 @@ export const useSessionStore = defineStore("session", {
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
 					this.send({ type: "list_sessions" });
+					return;
+				case "get_commands": {
+					this.commands = (data.commands as CommandInfo[] | undefined) ?? [];
+					return;
+				}
+				case "get_available_models": {
+					this.models = (data.models as ModelInfo[] | undefined) ?? [];
+					return;
+				}
+				case "get_available_thinking_levels": {
+					const levels = (data.levels ?? data.thinkingLevels) as string[] | undefined;
+					this.thinkingLevels = levels ?? [];
+					return;
+				}
+				case "get_session_stats": {
+					this.stats = data as SessionStats;
+					return;
+				}
+				case "get_tree": {
+					this.tree = (data.tree as unknown[] | undefined) ?? (Array.isArray(data) ? (data as unknown[]) : []);
+					return;
+				}
+				case "get_fork_messages": {
+					const points = (data.messages ?? data.forkMessages ?? data.entries) as ForkPoint[] | undefined;
+					this.forkPoints = points ?? [];
+					return;
+				}
+				case "get_last_assistant_text": {
+					this.lastAssistantText = String(data.text ?? "");
+					return;
+				}
+				case "export_html": {
+					this.configStatus = `export_html: ${JSON.stringify(data)}`;
+					return;
+				}
+				case "bash": {
+					this.shellRunning = false;
+					this.shellExitCode = typeof data.exitCode === "number" ? data.exitCode : null;
+					// The response can be truncated; streaming already delivered the chunks.
+					if (data.output && !this.shellOutput) this.shellOutput = String(data.output);
+					return;
+				}
+				case "clone":
+					if (data.cancelled) this.lastError = "pi cancelled the clone (an extension blocked it)";
+					this.send({ type: "get_state" });
+					this.send({ type: "get_messages" });
+					this.send({ type: "list_sessions" });
+					return;
+				case "fork": {
+					if (data.cancelled) {
+						this.lastError = "pi cancelled the fork (an extension blocked it)";
+						return;
+					}
+					this.send({ type: "get_state" });
+					this.send({ type: "get_messages" });
+					this.send({ type: "list_sessions" });
+					return;
+				}
+				case "set_model":
+				case "cycle_model":
+				case "set_thinking_level":
+				case "cycle_thinking_level":
+				case "set_auto_compaction":
+				case "set_auto_retry":
+				case "set_steering_mode":
+				case "set_follow_up_mode":
+					this.send({ type: "get_state" });
 					return;
 				case "set_session_name":
 					this.send({ type: "get_state" });
@@ -539,6 +656,118 @@ export const useSessionStore = defineStore("session", {
 			this.composerSeq++;
 		},
 
+		// ---- control surface -------------------------------------------------
+		openControl(tab?: string): void {
+			this.showControl = true;
+			if (tab) this.controlTab = tab;
+		},
+		requestCommands(): void {
+			this.send({ type: "get_commands" });
+		},
+		requestModels(): void {
+			this.send({ type: "get_available_models" });
+		},
+		requestThinkingLevels(): void {
+			this.send({ type: "get_available_thinking_levels" });
+		},
+		setModel(provider: string, modelId: string): void {
+			this.send({ type: "set_model", provider, modelId });
+		},
+		cycleModel(): void {
+			this.send({ type: "cycle_model" });
+		},
+		setThinking(level: string): void {
+			this.send({ type: "set_thinking_level", level });
+		},
+		cycleThinking(): void {
+			this.send({ type: "cycle_thinking_level" });
+		},
+		setAutoCompaction(enabled: boolean): void {
+			this.autoCompaction = enabled;
+			this.send({ type: "set_auto_compaction", enabled });
+		},
+		setAutoRetry(enabled: boolean): void {
+			this.autoRetry = enabled;
+			this.send({ type: "set_auto_retry", enabled });
+		},
+		setSteeringMode(mode: string): void {
+			this.send({ type: "set_steering_mode", mode });
+		},
+		setFollowUpMode(mode: string): void {
+			this.send({ type: "set_follow_up_mode", mode });
+		},
+		requestStats(): void {
+			this.send({ type: "get_session_stats" });
+		},
+		requestTree(): void {
+			this.send({ type: "get_tree" });
+		},
+		requestForkPoints(): void {
+			this.send({ type: "get_fork_messages" });
+		},
+		forkFrom(entryId: string): void {
+			this.send({ type: "fork", entryId });
+		},
+		cloneSession(): void {
+			this.send({ type: "clone" });
+		},
+		exportHtml(path?: string): void {
+			this.send(path ? { type: "export_html", outputPath: path } : { type: "export_html" });
+		},
+		copyLastAssistant(): void {
+			this.send({ type: "get_last_assistant_text" });
+		},
+		/** A discoverable command runs by sending `/name` as a prompt (docs: get_commands). */
+		insertCommand(name: string): void {
+			this.insertIntoPrompt(`/${name} `);
+			this.showControl = false;
+		},
+		runBash(): void {
+			const command = this.shellCommand.trim();
+			if (!command) return;
+			this.shellOutput = "";
+			this.shellExitCode = null;
+			this.shellRunning = true;
+			this.send({ type: "bash", command, excludeFromContext: this.shellExcluded });
+		},
+		abortBash(): void {
+			this.send({ type: "abort_bash" });
+		},
+		loadConfigFiles(): void {
+			void fetch("/api/config")
+				.then((response) => response.json() as Promise<{ files: ConfigFile[] }>)
+				.then((data) => {
+					this.configFiles = data.files ?? [];
+					if (!this.configName && this.configFiles.length) this.pickConfig(this.configFiles[0].name);
+				})
+				.catch((error: unknown) => {
+					this.configStatus = `could not read config: ${String(error)}`;
+				});
+		},
+		pickConfig(name: string): void {
+			const file = this.configFiles.find((item) => item.name === name);
+			this.configName = name;
+			this.configDraft = file?.content ?? "";
+			this.configStatus = "";
+		},
+		saveConfig(): void {
+			this.configStatus = "saving…";
+			void fetch("/api/config", {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ name: this.configName, content: this.configDraft }),
+			})
+				.then((response) => response.json() as Promise<{ ok?: boolean; error?: string; backupPath?: string | null; bytes?: number; takesEffect?: string }>)
+				.then((data) => {
+					this.configStatus = data.ok
+						? `written ${data.bytes} bytes${data.backupPath ? ` (previous kept at ${data.backupPath})` : ""} — ${data.takesEffect}`
+						: `refused: ${data.error}`;
+					if (data.ok) this.loadConfigFiles();
+				})
+				.catch((error: unknown) => {
+					this.configStatus = `write failed: ${String(error)}`;
+				});
+		},
 		answerSelect(id: string, value: string | undefined): void {
 			if (value === undefined) this.send({ type: "ui_response", id, cancelled: true });
 			else this.send({ type: "ui_response", id, value });

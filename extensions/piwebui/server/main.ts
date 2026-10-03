@@ -10,7 +10,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rename, stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -90,6 +90,71 @@ async function serveStatic(pathname: string, res: ServerResponse): Promise<void>
 /** Only these methods expect an answer; the rest (notify/setStatus/setWidget/setTitle/set_editor_text) are one-way. */
 const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
+/**
+ * RPC commands the browser may trigger. Field names follow docs/rpc-commands.md; anything
+ * not listed here is refused instead of being forwarded blindly.
+ */
+const RPC_PASSTHROUGH: Record<string, { fields: string[]; required?: string[] }> = {
+	get_commands: { fields: [] },
+	get_available_models: { fields: [] },
+	get_available_thinking_levels: { fields: [] },
+	get_session_stats: { fields: [] },
+	get_tree: { fields: [] },
+	get_entries: { fields: ["since"] },
+	get_fork_messages: { fields: [] },
+	get_last_assistant_text: { fields: [] },
+	cycle_model: { fields: [] },
+	cycle_thinking_level: { fields: [] },
+	abort_retry: { fields: [] },
+	abort_bash: { fields: [] },
+	clone: { fields: [] },
+	set_model: { fields: ["provider", "modelId"], required: ["modelId"] },
+	set_thinking_level: { fields: ["level"], required: ["level"] },
+	set_auto_compaction: { fields: ["enabled"], required: ["enabled"] },
+	set_auto_retry: { fields: ["enabled"], required: ["enabled"] },
+	set_steering_mode: { fields: ["mode"], required: ["mode"] },
+	set_follow_up_mode: { fields: ["mode"], required: ["mode"] },
+	fork: { fields: ["entryId"], required: ["entryId"] },
+	export_html: { fields: ["outputPath"] },
+	bash: { fields: ["command", "excludeFromContext"], required: ["command"] },
+};
+
+/**
+ * Config files the web UI may read and write. Credentials (auth.json), caches and
+ * dependency manifests are deliberately excluded.
+ */
+const CONFIG_FILES = [
+	"settings.json",
+	"models.json",
+	"policy.json",
+	"sandbox.json",
+	"notify.json",
+	"computer-use.json",
+	"checkpoints.json",
+	"preview.json",
+	"trust.json",
+];
+
+const MAX_BODY = 1_000_000;
+
+function readBody(req: IncomingMessage): Promise<string> {
+	return new Promise((done, fail) => {
+		let size = 0;
+		const chunks: Buffer[] = [];
+		req.on("data", (chunk: Buffer) => {
+			size += chunk.byteLength;
+			if (size > MAX_BODY) {
+				fail(new Error(`body larger than ${MAX_BODY} bytes`));
+				req.destroy();
+				return;
+			}
+			chunks.push(chunk);
+		});
+		req.on("end", () => done(Buffer.concat(chunks).toString("utf8")));
+		req.on("error", fail);
+	});
+}
+
 function main(): void {
 	const args = parseArgs(process.argv.slice(2));
 	// Sessions live next to the config that pi itself uses (PI_CODING_AGENT_DIR wins).
@@ -152,6 +217,74 @@ function main(): void {
 					res.writeHead(500, { "content-type": "application/json" });
 					res.end(JSON.stringify({ error: String(error) }));
 				});
+			return;
+		}
+		if (url.pathname === "/api/config" && req.method === "GET") {
+			void (async () => {
+				const files = [];
+				for (const name of CONFIG_FILES) {
+					const path = join(agentDir, name);
+					try {
+						const [info, content] = await Promise.all([stat(path), readFile(path, "utf8")]);
+						files.push({ name, path, exists: true, bytes: info.size, content });
+					} catch (error) {
+						files.push({ name, path, exists: false, bytes: 0, content: "", error: (error as NodeJS.ErrnoException).code ?? String(error) });
+					}
+				}
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(JSON.stringify({ agentDir, files, note: "auth.json is not exposed" }));
+			})().catch((error: unknown) => {
+				res.writeHead(500, { "content-type": "application/json" });
+				res.end(JSON.stringify({ error: String(error) }));
+			});
+			return;
+		}
+		if (url.pathname === "/api/config" && req.method === "PUT") {
+			void (async () => {
+				let body: { name?: string; content?: string };
+				try {
+					body = JSON.parse(await readBody(req)) as { name?: string; content?: string };
+				} catch (error) {
+					res.writeHead(400, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ok: false, error: `unreadable body: ${String(error)}` }));
+					return;
+				}
+				const name = String(body.name ?? "");
+				// Invariant: only the allowlisted names may be written (no traversal, no auth.json).
+				if (!CONFIG_FILES.includes(name)) {
+					res.writeHead(403, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ok: false, error: `refused: ${name || "(empty)"} is not one of ${CONFIG_FILES.join(", ")}` }));
+					return;
+				}
+				const content = String(body.content ?? "");
+				try {
+					JSON.parse(content);
+				} catch (error) {
+					res.writeHead(400, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ok: false, error: `refused: not valid JSON — ${String(error)}` }));
+					return;
+				}
+				const path = join(agentDir, name);
+				const previous = await readFile(path, "utf8").catch(() => null);
+				if (previous !== null) await writeFile(`${path}.bak`, previous, "utf8");
+				const tmp = `${path}.tmp-${process.pid}`;
+				await writeFile(tmp, content, "utf8");
+				await rename(tmp, path);
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						ok: true,
+						name,
+						path,
+						bytes: Buffer.byteLength(content),
+						backupPath: previous !== null ? `${path}.bak` : null,
+						takesEffect: "written to disk; extensions read their config when the session loads — /reload in the terminal (or a restart) applies it",
+					}),
+				);
+			})().catch((error: unknown) => {
+				res.writeHead(500, { "content-type": "application/json" });
+				res.end(JSON.stringify({ ok: false, error: String(error) }));
+			});
 			return;
 		}
 		if (url.pathname === "/api/preview") {
@@ -262,9 +395,6 @@ function main(): void {
 			case "compact":
 				child.command("compact");
 				return;
-			case "set_model":
-				child.command("set_model", { model: String(message.model ?? "") });
-				return;
 			case "ui_response": {
 				const id = String(message.id ?? "");
 				if (!pendingUi.has(id)) {
@@ -298,8 +428,23 @@ function main(): void {
 			case "dev_stop":
 				broadcast({ ...previewInfo(), status: devServer.stop() });
 				return;
-			default:
-				socket.send(JSON.stringify({ type: "error", message: `unknown client message type: ${type}` }));
+			default: {
+				const spec = RPC_PASSTHROUGH[type];
+				if (!spec) {
+					socket.send(JSON.stringify({ type: "error", message: `unknown client message type: ${type}` }));
+					return;
+				}
+				const passPayload: Record<string, unknown> = {};
+				for (const field of spec.fields) if (message[field] !== undefined) passPayload[field] = message[field];
+				const missing = (spec.required ?? []).filter((field) => passPayload[field] === undefined);
+				if (missing.length) {
+					socket.send(JSON.stringify({ type: "error", message: `${type} needs ${missing.join(", ")}` }));
+					return;
+				}
+				// hand the message id through so streaming events can be correlated
+				child.command(type, passPayload, typeof message.id === "string" ? message.id : undefined);
+				return;
+			}
 		}
 	}
 

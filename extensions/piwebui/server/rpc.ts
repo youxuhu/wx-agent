@@ -134,8 +134,8 @@ export class PiRpcChild extends EventEmitter {
 		return this.send({ id, type: "prompt", message });
 	}
 
-	command(type: string, payload: Record<string, unknown> = {}): boolean {
-		return this.send({ id: `${type}-${Date.now()}`, type, ...payload });
+	command(type: string, payload: Record<string, unknown> = {}, id?: string): boolean {
+		return this.send({ id: id ?? `${type}-${Date.now()}`, type, ...payload });
 	}
 
 	/** Answer an extension UI dialog. `cancelled` maps to a dismissed dialog. */

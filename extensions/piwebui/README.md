@@ -48,6 +48,30 @@ cwd 先做 realpath，故 `/tmp` 落到 `--private-tmp--`）。列表包含：�
 - **invariant**：只允许切换到**当前 cwd 会话目录内**的 `.jsonl`；其他路径一律拒绝并报事实。
 - 界面：标题栏 `sessions` 按钮打开抽屉，行内显示 `current` / `switch`、时间、条数、大小与首句。
 
+## 控制面（把 TUI 能干的事搬到浏览器）
+
+标题栏 `control` 按钮 → 右侧抽屉，五个分页，全部是**真实 RPC 命令**，没有假按钮：
+
+| 分页 | 能力 | 走什么 |
+| --- | --- | --- |
+| `commands` | 枚举 pi 当前会话里全部可调用命令（扩展命令 / 提示模板 / 技能），点击把 `/name ` 放进输入框 | `get_commands`；执行 = `prompt` 发 `/name`（pi 文档：扩展命令经 prompt 立即执行） |
+| `model` | 当前模型 / 思考等级、循环切换、可用模型与思考等级列表、auto-compaction、auto-retry（+abort retry）、steering / follow-up 队列模式 | `get_available_models` `set_model` `cycle_model` `get_available_thinking_levels` `set_thinking_level` `cycle_thinking_level` `set_auto_compaction` `set_auto_retry` `abort_retry` `set_steering_mode` `set_follow_up_mode` `get_state` |
+| `session` | 统计（token/成本/上下文）、会话树、fork 点与 fork、clone、export html、最后一条助手文本 | `get_session_stats` `get_tree` `get_fork_messages` `fork` `clone` `export_html` `get_last_assistant_text` |
+| `shell` | 直接执行 shell（等价 TUI 的 `!`），输出流式显示，可 abort，可 exclude from context | `bash`（`bash_execution_update` 流式事件）+ `abort_bash` |
+| `config` | 读写 pi 的配置文件 | `GET/PUT /api/config` |
+
+**配置写入的规则**：只允许白名单（`settings.json` / `models.json` / `policy.json` / `sandbox.json` / `notify.json` / `computer-use.json` / `checkpoints.json` / `preview.json` / `trust.json`）；**`auth.json` 永不暴露**；保存前校验 JSON，失败拒绝；写入是「先写 `.tmp-<pid>` 再 rename」，旧内容保留为 `<file>.bak`；返回里明确写「写盘了，但扩展是加载时读配置 → 需终端 `/reload` 或重启才生效」。
+
+**RPC 白名单**：浏览器能触发的命令在服务端 `RPC_PASSTHROUGH` 表里逐条列出**允许字段与必填字段**，表外的（如 `login`）一律拒绝并回原文；缺必填字段直接在服务端拒绝，不发给 pi。
+
+### 与 TUI 的真实差距（不可达的部分）
+
+pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt 发送也不会执行"。因此 `/settings`（交互设置界面）、`/hotkeys`、`/login` `/logout`、`/llama`、`/share`、`/bug`、`/trust`（交互确认）、`/reload` 在 Web UI 里**没有等价物**——除 `/reload` 外都不影响日常使用；改完配置需要在终端敲一次 `/reload`。其余 TUI 能力（模型/思考/压缩/重试/队列模式/会话切换/命名/分叉/克隆/导出/统计/命令/shell）都已在浏览器里可用。
+
+### 验收
+
+`node probe/control-probe.ts` → **21/21**：命令枚举与执行（`disposition: "handled"`）、模型/思考等级、设置往返、会话统计/树/fork 点/最后助手文本、`bash` 真执行 + 流式事件、未知命令与缺字段拒绝、配置白名单/JSON 校验/原子写 + `.bak`、`auth.json` 不暴露。
+
 ## 预览面板（P3）
 
 标题栏 `preview` 按钮打开右侧面板：`iframe` 指向**同源代理** `/__proxy/`，前面是我们自己起的本地 dev server。
