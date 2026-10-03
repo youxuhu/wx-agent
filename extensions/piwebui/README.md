@@ -200,6 +200,8 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 ### 验收
 
+`npm run typecheck` 用 **vue-tsc**（模板也查类型）；离线探针 `probe/message-probe.ts` 覆盖消息块渲染。
+
 `node probe/control-probe.ts` → **21/21**：命令枚举与执行（`disposition: "handled"`）、模型/思考等级、设置往返、会话统计/树/fork 点/最后助手文本、`bash` 真执行 + 流式事件、未知命令与缺字段拒绝、配置白名单/JSON 校验/原子写 + `.bak`、`auth.json` 不暴露。
 
 ## 预览面板（P3）
@@ -266,6 +268,8 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 界面上没有深色开关。
 
 ## 验收
+
+`npm run typecheck` 用 **vue-tsc**（模板也查类型）；离线探针 `probe/message-probe.ts` 覆盖消息块渲染。
 
 八个探针，共 **108 项**（都需要服务在对应端口运行）：
 

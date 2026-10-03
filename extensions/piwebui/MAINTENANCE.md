@@ -70,7 +70,7 @@ server/main.ts ── 只绑 127.0.0.1 ──┬── Workspace 注册表（一
 cd ~/.pi/agent/extensions/piwebui
 
 npm run build            # 改前端后：vite 构建到 dist/
-npm run typecheck        # TS 检查（build 不做类型检查）
+npm run typecheck        # vue-tsc：TS **加上 .vue 模板**的类型检查（build 不做检查）
 npm run start -- --port 7799 --cwd <目录> --model <provider/model> --thinking low
                          # 或直接：node server/main.ts --port 7799 --cwd ~/project/minepi
 
@@ -97,6 +97,7 @@ npm run desktop:build    # 出 .app + .dmg
 | `probe/disconnect-probe.ts` | :7801 + 测试 agentDir | 审批断线：仍挂起、不自动放行、无副作用、重连仍收到、拒绝后没执行 | 7/7 |
 | `probe/markdown-probe.ts` | 无（离线） | 渲染各构件 + `<script>`/`<img onerror>`/`javascript:` 三种注入被中和 | 13/13 |
 | `probe/health-probe.ts` | 无（离线） | 健康指示 9 种状态映射与优先级 | 9/9 |
+| `probe/message-probe.ts` | 无（离线，含真实 `get_messages` 抓包） | 消息块解析：判别字段是 **`kind`**（不是 `type`）、thinking 独立块、toolCall→toolCallId、字符串 content、空 content 不造假块、未知块类型被丢弃、`messageToText` 只取 text | 10/10 |
 | `probe/run-lifecycle-probe.ts` | :7799 | 运行生命周期：运行中 plain prompt 会被 pi 拒绝（所以我们必须带 `streamingBehavior`）、`followUp` 被接受（`disposition: queued`）、settle 后 plain prompt 又能用、`get_state.isStreaming` 是布尔 | 6/6 |
 | `probe/auth-probe.ts` | :7802 + 一次性 agentDir | provider 列表、**响应里不出现任何密钥值**（与真实 auth.json 比对）、OAuth 不可被 api key 覆盖、坏 provider/空 key 拒绝、写入合并、删除需确认、文件权限 600 | 11/11 |
 
@@ -131,6 +132,12 @@ npm run desktop:build    # 出 .app + .dmg
 - **错误条是短暂的**：新活动（发消息/开始运行/成功响应）会自动清掉，也可以点 `Dismiss`；真正的持续性问题（socket 断、pi 退出）由顶栏健康指示负责，不要塞进错误条。
 - 运行卡住时的恢复手段：`abort`（会顺带清错并重新拉 `get_state`）。
 
+## 6.7 消息渲染（"只看到 You/pi，没有内容"）
+
+- 块的判别字段是 **`kind`**（`types.ts` 里的 `Block` 联合类型：`text` / `thinking` / `tool`），**不是 `type`**；工具块用 `toolCallId`。模板里写错字段名时，每个块都匹配不上，界面就只剩角色标签。
+- 为什么没被拦住：`tsc --noEmit` **不检查 `.vue` 模板**。现在 `npm run typecheck` 走 **vue-tsc**，模板里的类型错误会直接报出来（这条就是它抓到的第二处：`ToolCard` 用了不存在的 `run.name`，真实字段是 `toolName`）。
+- 改动消息渲染后跑 `probe/message-probe.ts`（用真实抓包做输入）。
+
 ## 7. 故障排查
 
 | 现象 | 原因与处理 |
@@ -138,6 +145,7 @@ npm run desktop:build    # 出 .app + .dmg
 | 页面 `not found: / (the UI is not built yet)` | `dist/` 不存在或路径不对：先 `npm run build`；桌面版看 `--web-dir` 是否指向 `Resources/dist` |
 | 顶栏 `service closed` / `connecting…` | 服务没起或被 kill；浏览器会 1/2/4/8/15s 退避重连（**不重放任何消息**） |
 | 顶栏 `pi exited (1)` | pi 子进程崩了：看服务日志 stderr 原文；常见是模型/凭据问题 |
+| 消息只剩 `You` / `pi` 没有内容 | 块字段名写错（应为 `kind`）；`npm run typecheck`（vue-tsc）会报，`probe/message-probe.ts` 覆盖 |
 | 出错后再也发不出消息 / 输入框一直显示 Stop | 运行标志没复位：见 §6.6；先按 `Stop`（abort）恢复，再确认 `agent_end`/`agent_settled` 的置位逻辑没被改坏 |
 | 审批弹窗不出现 | 只有 `select/confirm/input/editor` 是对话框；`policy` 处于 `auto` 模式时 ask 规则会被自动放行（有审计）；`/policy mode normal` 可恢复 |
 | 会话列表是空的 | 会话按 **cwd 的 realpath** 编码存放（`/tmp` → `--private-tmp--`）；切到正确的 workspace 再看 |

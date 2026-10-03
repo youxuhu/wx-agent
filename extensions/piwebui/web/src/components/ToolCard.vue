@@ -3,10 +3,10 @@
 import { computed, ref } from "vue";
 import type { ToolRun } from "../types.ts";
 
-const props = defineProps<{ run?: ToolRun; fallbackName?: string }>();
+const props = defineProps<{ run?: ToolRun }>();
 const open = ref(false);
 
-const name = computed(() => props.run?.name ?? props.fallbackName ?? "tool");
+const name = computed(() => props.run?.toolName ?? "tool");
 const status = computed(() => props.run?.status ?? "running");
 const duration = computed(() => {
 	const run = props.run;

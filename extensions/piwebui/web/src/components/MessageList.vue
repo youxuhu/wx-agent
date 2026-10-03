@@ -14,12 +14,13 @@ const props = defineProps<{ messages: ChatMessage[]; tools: Record<string, ToolR
 			<article v-for="message in props.messages" :key="message.id" :class="message.role === 'user' ? 'msg-user' : 'msg-assistant'">
 				<div class="msg-role">{{ message.role === "user" ? "You" : "pi" }}</div>
 				<template v-for="(block, index) in message.blocks" :key="index">
-					<div v-if="block.type === 'text'" class="msg-body">{{ block.text }}</div>
-					<details v-else-if="block.type === 'thinking'" class="thinking">
-						<summary>thinking{{ block.done ? "" : "…" }}</summary>
+					<!-- The block discriminator is `kind` (see Block in types.ts), not `type`. -->
+					<div v-if="block.kind === 'text'" class="msg-body">{{ block.text }}</div>
+					<details v-else-if="block.kind === 'thinking'" class="thinking">
+						<summary>thinking</summary>
 						<pre class="dim">{{ block.text }}</pre>
 					</details>
-					<ToolCard v-else-if="block.type === 'tool'" :run="props.tools[block.id]" :fallback-name="block.name" />
+					<ToolCard v-else-if="block.kind === 'tool'" :run="props.tools[block.toolCallId]" />
 				</template>
 			</article>
 		</div>
