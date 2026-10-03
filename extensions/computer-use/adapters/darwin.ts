@@ -457,6 +457,19 @@ export function createAdapter(): PlatformAdapter {
  */
 		async typeText(t: string): Promise<void> {
 			const m = await nut();
+			// CJK/emoji/other non-ASCII: keyboard.type is unreliable on this box
+			// (B1) — route through clipboard+paste instead, preserving the old
+			// clipboard around the paste.
+			const asciiOnly = /^[\x20-\x7E]*$/.test(t);
+			if (!asciiOnly && !t.includes("\n")) {
+				const prev = spawnSync("pbpaste", { encoding: "utf8", timeout: 3_000 }).stdout ?? "";
+				const copy = spawnSync("pbcopy", { input: t, timeout: 3_000 });
+				if (copy.status !== 0) throw new Error("typeText: pbcopy failed");
+				await this.pressKey("cmd+v");
+				await new Promise((r) => setTimeout(r, 150));
+				if (prev) spawnSync("pbcopy", { input: prev, timeout: 3_000 });
+				return;
+			}
 			for (const ch of t) {
 				if (ch === "\n") {
 					await m.keyboard.pressKey(m.Key.Return);
@@ -471,7 +484,7 @@ export function createAdapter(): PlatformAdapter {
 				}
 				const k = mapKey(ch);
 				if (typeof k === "number") await m.keyboard.pressKey(k as import("@nut-tree-fork/nut-js").Key);
-				else await m.keyboard.type(ch); // unmappable (CJK/emoji etc.) — single-char fallback
+				else await m.keyboard.type(ch); // unmappable ASCII edge — single-char fallback
 			}
 		},
 
