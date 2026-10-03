@@ -205,7 +205,7 @@ export function decideLevel(input: {
 export interface BlockInfo {
 	kind: "popup" | "focus-change" | "no-progress";
 	detail: string; // human- and model-readable
-	hint: string; // suggested next move
+	hint: string; // v3.4: purely factual observation signal — no suggested actions
 }
 
 export interface Observation {
@@ -240,15 +240,15 @@ export function detectBlocked(input: {
 
 	// no-progress: same perceptual hash as the immediately previous observation (N=1).
 	if (mutating && prevHash !== null && hash === prevHash && hash !== "") {
-		return { kind: "no-progress", detail: "screen unchanged after the action", hint: "try a different path or check whether the action took effect" };
+		return { kind: "no-progress", detail: "screen unchanged after the action", hint: "动作后屏幕状态无变化（hash 未变）" };
 	}
 	// focus-change: focused window changed and it is not where we were working.
 	if (mutating && focused && prevFocused && focused.appName !== prevFocused.appName) {
-		return { kind: "focus-change", detail: `focus moved from ${prevFocused.appName} to ${focused.appName}`, hint: "a dialog or new window stole focus; deal with it first (e.g. press Esc)" };
+		return { kind: "focus-change", detail: `focus moved from ${prevFocused.appName} to ${focused.appName}`, hint: `前台焦点已从 ${prevFocused.appName} 变更至 ${focused.appName}` };
 	}
 	// popup: focused window was not in the previously listed set of windows.
 	if (mutating && focused && knownWindows && !knownWindows.has(windowKey(focused))) {
-		return { kind: "popup", detail: `focused window '${focused.title || focused.appName}' is new`, hint: "handle the popup before continuing" };
+		return { kind: "popup", detail: `focused window '${focused.title || focused.appName}' is new`, hint: `前台窗口 '${focused.title || focused.appName}' 不在之前的窗口清单中（新出现）` };
 	}
 	return null;
 }

@@ -28,7 +28,7 @@ screenshot            显式截图；返回 full 观察（截图+控件树+窗�
 left_click            左键单击目标（element index 优先，x/y 兜底）
 double_click          左键双击
 right_click           右键单击
-type   + text         逐字符键入文本（换行=Return；中文走兜底通道）
+type   + text         键入文本，产生真实键盘事件（与物理输入等效）；换行=Return
 key    + text         组合键，如 "cmd+c" / "enter" / "tab"
 scroll + up|down      滚轮滚动，amount 默认 3
 wait   + ms           等待 100..10000 毫秒（不产生观察）
@@ -44,15 +44,15 @@ minimal = 一行状态回执（hash + 焦点窗口），用于 3 秒内重复的
 
 == 定位优先级 (v3.2) ==
 1. elementName:按控件名匹配（精确>前缀>包含，可点优先）——首选，免索引免坐标；
-   例: left_click elementName:"播放" / elementName:"搜索"
+   例: left_click elementName:"确定"
 2. element index:树里的编号（elementName 找不到或同名多个时用）
 3. x/y 像素:最后手段，只能用于最近截图 raster 系
 自动置顶:动作前若焦点漂移到别的 App，扩展会自动把上次观察的 App 调回前台（防遮挡/防点错窗）。
 
-== 播放器/网页应用技巧 ==
-视频/音频站点的播放器控件几乎总在 a11y 树里：先 list 一次树，找 Button "播放/暂停"、
-时间戳 StaticText（如 "01:16 / 03:48"）、倍速/全屏等，直接 element index 点击，无需截图猜坐标。
-验证是否在播：两次观察比对时间戳文本或 stateHash 是否推进；wait 动作 0 成本。
+== 动态内容观察 ==
+状态随时间变化的界面（计数/时间戳/进度类文本）：两次观察比对 stateHash / 树指纹 /
+时间戳类文本即可确认是否变化；wait 动作 0 成本。type 产生真实键盘事件（v3.4 起），
+app 侧依赖键事件的机制自然触发；观察是否生效同样用两次观察比对。
 
 == 坐标系 (§3) ==
 full 观察的截图坐标 = raster 系（图片实际像素）；tree 观察的控件坐标 = logical 系
@@ -64,7 +64,7 @@ widget index 为深度优先 1-based；tree 上限 400 节点 / 200 行。
 被遮挡时先 activate 目标 App 再点击，避免动作进错窗口。
 
 == 阻塞与停止 ==
-结果尾行 blocked: popup|focus-change|no-progress 给出原因与建议。
+结果尾行 blocked: popup|focus-change|no-progress 给出事实性观察描述（含可观测信号）。
 连续 3 次无变化或重复循环会被控制器硬停，此时必须换路径或向用户汇报。
 
 == /cua 命令 ==

@@ -191,7 +191,7 @@ if !target.isEmpty {
   for a in NSWorkspace.shared.runningApplications {
     guard a.activationPolicy == .regular else { continue }
     let name = a.localizedName?.lowercased() ?? ""
-    // exact match first; then prefix/contains so "safari" hits "Safari浏览器"
+    // exact match first; then prefix/contains so lowercase input hits localized names
     if a.bundleIdentifier == target || a.localizedName == target || name == t
        || name.hasPrefix(t) || name.contains(t) { best = a; break }
   }
@@ -207,7 +207,7 @@ if let a = best {
   appName = a.localizedName ?? ""
   bundleId = a.bundleIdentifier ?? ""
   // Un-minimize: a minimized frontmost app reports focus but has no on-screen
-  // window (the trap that hit the Music test) — restore via AX so clicks land.
+  // window (the trap hit in earlier testing) — restore via AX so clicks land.
   if pid > 0 {
     let appEl = AXUIElementCreateApplication(pid)
     var winsRef: CFTypeRef?
@@ -232,6 +232,48 @@ function runSwift(script: string, timeoutMs = SWIFT_TIMEOUT_MS, env?: NodeJS.Pro
 	}
 	return r.stdout;
 }
+
+/**
+ * v3.4 §1.1: typeUnicode — real keyboard events for arbitrary Unicode text (CJK, emoji…).
+ * Per-character CGEvent keyDown/keyUp with keyboardSetUnicodeString (UTF-16), posted at
+ * .cghidEventTap — indistinguishable from physical typing, so app-side key-event
+ * mechanisms fire naturally (unlike clipboard paste). Text arrives via CUA_TEXT env;
+ * stdout {"ok":true,"posted":N}. >80 chars is refused (caller should split or fall
+ * back); total injection time hard-capped at 2s; spawnSync timeout 3s.
+ */
+const TYPE_UNICODE_SWIFT = `
+import Foundation
+import CoreGraphics
+let MAX_CHARS = 80
+let MAX_MS = 2000.0
+let text = ProcessInfo.processInfo.environment["CUA_TEXT"] ?? ""
+func fail(_ msg: String) -> Never {
+  let d = try! JSONSerialization.data(withJSONObject: ["ok": false, "error": msg])
+  print(String(data: d, encoding: .utf8)!)
+  exit(0)
+}
+guard !text.isEmpty else { fail("missing text") }
+guard text.count <= MAX_CHARS else { fail("text too long (>\(MAX_CHARS) chars); split it") }
+let start = Date()
+let src = CGEventSource(stateID: .hidSystemState)
+var posted = 0
+let chars = Array(text)
+for (i, ch) in chars.enumerated() {
+  if Date().timeIntervalSince(start) * 1000 > MAX_MS { break }
+  let s = String(ch) as CFString
+  let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true)
+  down?.keyboardSetUnicodeString(stringLength: s.length, unicodeString: s)
+  down?.post(tap: .cghidEventTap)
+  let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
+  up?.keyboardSetUnicodeString(stringLength: s.length, unicodeString: s)
+  up?.post(tap: .cghidEventTap)
+  posted += 1
+  if i < chars.count - 1 { usleep(20_000) }
+}
+let result: [String: Any] = ["ok": true, "posted": posted]
+let d = try! JSONSerialization.data(withJSONObject: result)
+print(String(data: d, encoding: .utf8)!)
+`;
 
 function runSwiftJSON<T>(script: string, timeoutMs = SWIFT_TIMEOUT_MS, env?: NodeJS.ProcessEnv): T {
 	const out = runSwift(script, timeoutMs, env).trim();
@@ -450,24 +492,53 @@ export function createAdapter(): PlatformAdapter {
 		},
 
 /**
- * B1 (PLAN §2.1): per-character pressKey typing. nut.js keyboard.type silently drops
- * text in this environment; pressKey is the verified path. Newline → Return;
- * mappable ASCII → pressKey (uppercase via Shift+twin); unmappable chars (CJK/emoji)
- * fall back to keyboard.type for that single character.
+ * v3.4 §1.2 dispatch:
+ *   ASCII mappable → per-character pressKey (B1 path, verified).
+ *   non-ASCII      → typeUnicode (CGEvent real key events, new main path);
+ *                    on failure → clipboard paste + cmd+v fallback (clipboard
+ *                    saved/restored around the paste, as before).
+ * Segments split on "\n" (Return pressed between); any segment >80 chars or a
+ * typeUnicode failure routes the WHOLE text through the clipboard fallback to
+ * avoid partial double-typing.
  */
 		async typeText(t: string): Promise<void> {
 			const m = await nut();
-			// CJK/emoji/other non-ASCII: keyboard.type is unreliable on this box
-			// (B1) — route through clipboard+paste instead, preserving the old
-			// clipboard around the paste.
-			const asciiOnly = /^[\x20-\x7E]*$/.test(t);
-			if (!asciiOnly && !t.includes("\n")) {
+			const clipboardFallback = async (): Promise<void> => {
 				const prev = spawnSync("pbpaste", { encoding: "utf8", timeout: 3_000 }).stdout ?? "";
 				const copy = spawnSync("pbcopy", { input: t, timeout: 3_000 });
 				if (copy.status !== 0) throw new Error("typeText: pbcopy failed");
 				await this.pressKey("cmd+v");
 				await new Promise((r) => setTimeout(r, 150));
 				if (prev) spawnSync("pbcopy", { input: prev, timeout: 3_000 });
+			};
+			const asciiOnly = /^[\x20-\x7E]*$/.test(t);
+			if (!asciiOnly) {
+				const segments = t.split("\n");
+				if (segments.every((s) => s.length <= 80)) {
+					for (let i = 0; i < segments.length; i++) {
+						if (i > 0) await this.pressKey("enter");
+						if (segments[i].length === 0) continue; // "\n\n" ⇒ consecutive Return
+						let posted = -1;
+						try {
+							const r = runSwiftJSON<{ ok: boolean; posted: number }>(TYPE_UNICODE_SWIFT, SWIFT_TIMEOUT_MS, {
+								CUA_TEXT: segments[i],
+							});
+							if (r.ok) posted = r.posted;
+						} catch {
+							/* swift failed to spawn/compile — clipboard fallback below */
+						}
+						if (posted === [...segments[i]].length) continue;
+						if (posted > 0) {
+							// Partial injection (2s cap): real keys already went out — a
+							// paste would double-type the remainder. Surface it instead.
+							throw new Error(`typeText: typeUnicode partially posted ${posted}/${segments[i].length} chars`);
+						}
+						await clipboardFallback(); // typeUnicode produced nothing → paste
+						return;
+					}
+					return;
+				}
+				await clipboardFallback();
 				return;
 			}
 			for (const ch of t) {
