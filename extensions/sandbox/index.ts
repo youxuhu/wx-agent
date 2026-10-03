@@ -1,186 +1,369 @@
 /**
- * sandbox — permission gate for writes outside the project root.
+ * sandbox — OS-level sandboxing for bash commands.
  *
- * Runs in BUILD mode only (plan mode is already read-only via plan-switch and
- * the sandbox learns the current role over the pi event bus). While in build
- * mode and in "ask" mode, any `write`/`edit` whose target resolves OUTSIDE the
- * session cwd requires user approval:
+ * Applies kernel-enforced filesystem and network policy to every bash command
+ * and all of its child processes (macOS `sandbox-exec`, Linux `bubblewrap`),
+ * via `@anthropic-ai/sandbox-runtime`. This replaces the previous policy-layer
+ * extension, which only gated the write/edit tools and could be bypassed by any
+ * shell redirection; the per-call approval ability moved to the `policy`
+ * extension instead.
  *
- *   - Allow once   : allow this single call
- *   - Always allow : remember the exact resolved path (persisted) and allow
- *   - Deny         : block the call
+ * Config (merged, project wins):
+ *   ~/.pi/agent/sandbox.json      (global)
+ *   <cwd>/.pi/sandbox.json        (project)
  *
- * A mode selector decides whether approval is needed at all:
- *   - ask    : gate outside-root writes (default)
- *   - bypass : no approval, fully permissive ("不需要审批")
+ *   {
+ *     "enabled": true,
+ *     "network":    { "allowedDomains": [...], "deniedDomains": [] },
+ *     "filesystem": { "denyRead": [...], "allowWrite": [...], "denyWrite": [...] }
+ *   }
  *
- * Config is persisted to ~/.pi/agent/sandbox.json:
- *   { "mode": "ask" | "bypass", "allowedPaths": ["/abs/path", ...] }
+ * Legacy `{ "mode": "bypass" | "ask", "allowedPaths": [...] }` is migrated:
+ * `bypass` → enabled:false, `ask` → enabled:true and allowedPaths appended to
+ * filesystem.allowWrite. The old file is backed up next to the new one.
  *
- * Commands: /sandbox [ask | bypass | status | clear]
+ * Commands: /sandbox [status | on | off | allow-domain <d> | allow-path <p> | violations]
+ * Flag:     --no-sandbox  (disable for this run)
+ *
+ * Measured limitation (this machine, 2026-09-23): filesystem policy is enforced for
+ * every bash child; the sandbox network proxy cannot reach upstream through the
+ * local transparent proxy, so outbound curl/npm hang while enabled. Default is off;
+ * `/sandbox on` gives a sealed, filesystem-protected shell.
  */
-
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { join } from "node:path";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type BashOperations, CONFIG_DIR_NAME, createBashTool, getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "sandbox.json");
-/** Tools that modify a file named by `input.path`. */
-const WRITE_TOOLS = new Set(["write", "edit"]);
-
-type Mode = "ask" | "bypass";
-
-interface SandboxConfig {
-	mode: Mode;
-	allowedPaths: string[];
+interface SandboxConfig extends SandboxRuntimeConfig {
+	enabled?: boolean;
+	ignoreViolations?: Record<string, string[]>;
+	enableWeakerNestedSandbox?: boolean;
 }
+const CONFIG_PATH = join(getAgentDir(), "sandbox.json");
 
-function loadConfig(): SandboxConfig {
-	try {
-		if (existsSync(CONFIG_PATH)) {
-			const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Partial<SandboxConfig>;
-			const mode: Mode = raw.mode === "bypass" ? "bypass" : "ask";
-			const allowedPaths = Array.isArray(raw.allowedPaths)
-				? raw.allowedPaths.filter((p): p is string => typeof p === "string")
-				: [];
-			return { mode, allowedPaths };
-		}
-	} catch {
-		/* fall through to defaults */
-	}
-	return { mode: "ask", allowedPaths: [] };
-}
-
-function saveConfig(cfg: SandboxConfig): void {
-	try {
-		writeFileSync(CONFIG_PATH, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
-	} catch {
-		/* best-effort persistence */
-	}
-}
-
-function expandHome(p: string): string {
+function expandPath(p: string): string {
 	if (p === "~") return homedir();
 	if (p.startsWith("~/")) return join(homedir(), p.slice(2));
 	return p;
 }
 
-function isInside(root: string, target: string): boolean {
-	const r = resolve(root);
-	const t = resolve(target);
-	return t === r || t.startsWith(r + sep);
+const DEFAULT_CONFIG: SandboxConfig = {
+	// Measured on this machine (2026-09-23): the filesystem policy is enforced and
+	// works; the sandbox's network MITM proxy cannot reach upstream through the
+	// local transparent proxy (Clash), so curl/npm hang while sandboxed. Default is
+	// therefore OFF — enable per session with `/sandbox on` when you want a sealed
+	// filesystem-protected shell and do not need outbound HTTP from it.
+	enabled: false,
+	network: {
+		allowedDomains: [
+			// model provider in use (see ~/.pi/agent/models-store.json)
+			"open.bigmodel.cn",
+			// source hosting + package registries
+			"github.com",
+			"*.github.com",
+			"api.github.com",
+			"raw.githubusercontent.com",
+			"registry.npmjs.org",
+			"*.npmjs.org",
+			"pypi.org",
+			"*.pypi.org",
+		],
+		deniedDomains: [],
+		allowLocalBinding: true,
+		// DNS resolution inside the sandbox goes through mDNSResponder
+		allowMachLookup: ["com.apple.mDNSResponder", "com.apple.dnssd", "com.apple.system.opendirectoryd.libinfo"],
+	},
+	filesystem: {
+		denyRead: ["~/.ssh", "~/.aws", "~/.gnupg"],
+		// "." = session cwd; ~/.pi keeps pi's own config/extensions writable;
+		// /private/var/folders is macOS TMPDIR (screencapture, temp files)
+		allowWrite: [".", "/tmp", "/private/tmp", "/private/var/folders", "~/.pi", "~/Library/Caches", "~/.npm"],
+		denyWrite: [".env", ".env.*", "*.pem", "*.key"],
+	},
+};
+
+function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): SandboxConfig {
+	const result: SandboxConfig = { ...base };
+	if (overrides.enabled !== undefined) result.enabled = overrides.enabled;
+	if (overrides.network) result.network = { ...base.network, ...overrides.network };
+	if (overrides.filesystem) result.filesystem = { ...base.filesystem, ...overrides.filesystem };
+	if (overrides.ignoreViolations) result.ignoreViolations = overrides.ignoreViolations;
+	if (overrides.enableWeakerNestedSandbox !== undefined) result.enableWeakerNestedSandbox = overrides.enableWeakerNestedSandbox;
+	return result;
 }
 
-export default function sandbox(pi: ExtensionAPI) {
-	const cfg = loadConfig();
-	const allowed = new Set<string>(cfg.allowedPaths.map((p) => resolve(expandHome(p))));
-	let mode: Mode = cfg.mode;
-	// Default to build so that, if plan-switch is absent, out-of-root writes are
-	// still gated (fail safe).
-	let role: "build" | "plan" = "build";
-	let currentCtx: ExtensionContext | undefined;
+/** Read config, migrating the legacy policy-layer shape when encountered. */
+function loadConfig(cwd: string): SandboxConfig {
+	const projectPath = join(cwd, CONFIG_DIR_NAME, "sandbox.json");
+	let global: Partial<SandboxConfig> = {};
+	let project: Partial<SandboxConfig> = {};
 
-	const persist = () => saveConfig({ mode, allowedPaths: [...allowed] });
+	if (existsSync(CONFIG_PATH)) {
+		try {
+			const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Record<string, unknown>;
+			if (raw.mode !== undefined && raw.enabled === undefined) {
+				// legacy { mode, allowedPaths } — migrate in place, keep a backup
+				const legacyMode = String(raw.mode);
+				const paths = Array.isArray(raw.allowedPaths) ? (raw.allowedPaths as string[]).map(expandPath) : [];
+				const migrated: SandboxConfig = deepMerge(DEFAULT_CONFIG, { enabled: legacyMode === "ask" });
+				if (paths.length) migrated.filesystem = { ...migrated.filesystem, allowWrite: [...(migrated.filesystem?.allowWrite ?? []), ...paths] };
+				try {
+					copyFileSync(CONFIG_PATH, `${CONFIG_PATH}.legacy.bak`);
+				} catch {
+					/* backup is best-effort; the migration itself still applies */
+				}
+				writeFileSync(CONFIG_PATH, `${JSON.stringify(migrated, null, 2)}\n`, "utf8");
+				global = migrated;
+			} else {
+				global = raw as Partial<SandboxConfig>;
+			}
+		} catch (e) {
+			console.error(`sandbox: could not parse ${CONFIG_PATH}: ${e}`);
+		}
+	}
 
-	const updateStatus = () => {
-		if (!currentCtx) return;
-		const label = mode === "bypass" ? "sandbox:bypass" : "sandbox:ask";
-		currentCtx.ui.setStatus(
-			"sandbox",
-			currentCtx.ui.theme.fg(mode === "bypass" ? "warning" : "success", label),
-		);
+	if (existsSync(projectPath)) {
+		try {
+			project = JSON.parse(readFileSync(projectPath, "utf8")) as Partial<SandboxConfig>;
+		} catch (e) {
+			console.error(`sandbox: could not parse ${projectPath}: ${e}`);
+		}
+	}
+
+	return deepMerge(deepMerge(DEFAULT_CONFIG, global), project);
+}
+
+function saveConfig(config: SandboxConfig): void {
+	writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+function createSandboxedBashOps(): BashOperations {
+	return {
+		async exec(command, cwd, { onData, signal, timeout }) {
+			if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
+			const wrappedCommand = await SandboxManager.wrapWithSandbox(command);
+			return new Promise((resolve, reject) => {
+				const child = spawn("bash", ["-c", wrappedCommand], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+				let timedOut = false;
+				let timeoutHandle: NodeJS.Timeout | undefined;
+				if (timeout !== undefined && timeout > 0) {
+					timeoutHandle = setTimeout(() => {
+						timedOut = true;
+						if (child.pid) {
+							try {
+								process.kill(-child.pid, "SIGKILL");
+							} catch {
+								child.kill("SIGKILL");
+							}
+						}
+					}, timeout * 1000);
+				}
+				child.stdout?.on("data", onData);
+				child.stderr?.on("data", onData);
+				child.on("error", (err) => {
+					if (timeoutHandle) clearTimeout(timeoutHandle);
+					reject(err);
+				});
+				const onAbort = () => {
+					if (child.pid) {
+						try {
+							process.kill(-child.pid, "SIGKILL");
+						} catch {
+							child.kill("SIGKILL");
+						}
+					}
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+				child.on("close", (code) => {
+					if (timeoutHandle) clearTimeout(timeoutHandle);
+					signal?.removeEventListener("abort", onAbort);
+					if (signal?.aborted) reject(new Error("aborted"));
+					else if (timedOut) reject(new Error(`timeout:${timeout}`));
+					else resolve({ exitCode: code });
+				});
+			});
+		},
+	};
+}
+
+export default function (pi: ExtensionAPI) {
+	pi.registerFlag("no-sandbox", {
+		description: "Disable OS-level sandboxing for bash commands",
+		type: "boolean",
+		default: false,
+	});
+
+	const localCwd = process.cwd();
+	const localBash = createBashTool(localCwd);
+
+	let sandboxEnabled = false;
+	let sandboxInitialized = false;
+	let lastError: string | undefined;
+
+	const statusText = () => {
+		if (!sandboxEnabled) return lastError ? `🔓 Sandbox off (${lastError})` : "🔓 Sandbox off";
+		const cfg = SandboxManager.getConfig();
+		const domains = cfg?.network?.allowedDomains?.length ?? 0;
+		const writes = cfg?.filesystem?.allowWrite?.length ?? 0;
+		return `🔒 Sandbox: ${domains} domains, ${writes} write paths`;
 	};
 
+	// Sandboxed bash replaces the built-in tool; when disabled the original runs untouched.
+	pi.registerTool({
+		...localBash,
+		label: sandboxEnabled ? "bash (sandboxed)" : "bash",
+		async execute(id, params, signal, onUpdate, ctx) {
+			if (!sandboxEnabled || !sandboxInitialized) {
+				return localBash.execute(id, params, signal, onUpdate, ctx);
+			}
+			const sandboxedBash = createBashTool(localCwd, { operations: createSandboxedBashOps() });
+			return sandboxedBash.execute(id, params, signal, onUpdate, ctx);
+		},
+	});
+
+	pi.on("user_bash", () => {
+		if (!sandboxEnabled || !sandboxInitialized) return;
+		return { operations: createSandboxedBashOps() };
+	});
+
+	async function initialize(config: SandboxConfig): Promise<void> {
+		await SandboxManager.initialize({
+			network: config.network,
+			filesystem: config.filesystem,
+			ignoreViolations: config.ignoreViolations,
+			enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
+		});
+		sandboxInitialized = true;
+		sandboxEnabled = true;
+		lastError = undefined;
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
-		currentCtx = ctx;
-		role = "build";
-		updateStatus();
+		if (pi.getFlag("no-sandbox") === true) {
+			sandboxEnabled = false;
+			lastError = "disabled via --no-sandbox";
+			ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
+			return;
+		}
+		const config = loadConfig(ctx.cwd);
+		if (config.enabled === false) {
+			sandboxEnabled = false;
+			lastError = "disabled via config";
+			ctx.ui.notify(`Sandbox disabled via ${CONFIG_PATH}`, "info");
+			return;
+		}
+		if (!SandboxManager.isSupportedPlatform()) {
+			sandboxEnabled = false;
+			lastError = `unsupported platform ${process.platform}`;
+			ctx.ui.notify(`Sandbox not supported on ${process.platform} — bash runs unsandboxed`, "warning");
+			return;
+		}
+		try {
+			await initialize(config);
+			ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", statusText()));
+		} catch (err) {
+			sandboxEnabled = false;
+			sandboxInitialized = false;
+			lastError = err instanceof Error ? err.message : String(err);
+			ctx.ui.notify(`Sandbox initialization failed: ${lastError}`, "error");
+		}
 	});
 
 	pi.on("session_shutdown", async () => {
-		currentCtx = undefined;
-	});
-
-	// plan-switch broadcasts the active role so the sandbox only gates in build mode.
-	pi.events.on("plan-switch:role", (data) => {
-		const r = (data as { role?: string } | undefined)?.role;
-		if (r === "plan" || r === "build") role = r;
-		updateStatus();
-	});
-
-	pi.on("tool_call", async (event, ctx) => {
-		if (role !== "build") return undefined; // plan mode has its own read-only guard
-		if (mode === "bypass") return undefined; // no-approval mode: fully permissive
-		if (!WRITE_TOOLS.has(event.toolName)) return undefined;
-
-		const raw = (event.input as { path?: unknown } | undefined)?.path;
-		if (typeof raw !== "string" || raw.length === 0) return undefined;
-
-		const target = resolve(ctx.cwd, expandHome(raw));
-		if (isInside(ctx.cwd, target)) return undefined; // inside project root → allowed
-		if (allowed.has(target)) return undefined; // previously "Always allow"
-
-		if (!ctx.hasUI) {
-			return {
-				block: true,
-				reason: `Sandbox: write outside the project root requires approval (no UI available): ${target}`,
-			};
+		if (!sandboxInitialized) return;
+		try {
+			await SandboxManager.reset();
+		} catch {
+			/* cleanup is best-effort */
 		}
-
-		const title =
-			`⚠️ 沙盒：写入项目根目录以外\n\n  ${target}\n\n` +
-			`项目根：${resolve(ctx.cwd)}\n\n是否允许？`;
-		const choice = await ctx.ui.select(title, ["Allow once", "Always allow", "Deny"]);
-
-		if (choice === "Always allow") {
-			allowed.add(target);
-			persist();
-			return undefined;
-		}
-		if (choice === "Allow once") return undefined;
-		return {
-			block: true,
-			reason: `Sandbox: user denied write outside the project root: ${target}`,
-		};
+		sandboxInitialized = false;
 	});
 
 	pi.registerCommand("sandbox", {
-		description: "Sandbox mode for out-of-root writes: /sandbox [ask|bypass|status|clear]",
+		description: "OS sandbox: /sandbox [status|on|off|allow-domain <d>|allow-path <p>|violations]",
 		handler: async (args, ctx) => {
-			currentCtx = ctx;
-			const arg = args.trim().toLowerCase();
+			const [cmd, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+			const arg = rest.join(" ");
+			const config = loadConfig(ctx.cwd);
 
-			const setMode = (m: Mode) => {
-				mode = m;
-				persist();
-				updateStatus();
-				ctx.ui.notify(`Sandbox mode: ${m}`, "info");
+			const reinit = async (next: SandboxConfig, note: string) => {
+				saveConfig(next);
+				try {
+					await SandboxManager.reset();
+				} catch {
+					/* re-init below replaces the state */
+				}
+				sandboxInitialized = false;
+				if (next.enabled === false) {
+					sandboxEnabled = false;
+					ctx.ui.setStatus("sandbox", undefined);
+					ctx.ui.notify(`${note}; sandbox disabled`, "info");
+					return;
+				}
+				await initialize(next);
+				ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", statusText()));
+				ctx.ui.notify(`${note}; sandbox re-initialized`, "info");
 			};
 
-			if (arg === "ask") return setMode("ask");
-			if (arg === "bypass") return setMode("bypass");
-			if (arg === "clear") {
-				allowed.clear();
-				persist();
-				ctx.ui.notify("Sandbox allowlist cleared.", "info");
-				return;
+			switch (cmd) {
+				case undefined:
+				case "status": {
+					const lines = [
+						`sandbox: ${sandboxEnabled ? "enabled" : "disabled"}${lastError ? ` (${lastError})` : ""}`,
+						`platform supported: ${SandboxManager.isSupportedPlatform()}`,
+						`config: ${CONFIG_PATH}`,
+						"",
+						`network allowed: ${config.network?.allowedDomains?.join(", ") || "(none)"}`,
+						`network denied:  ${config.network?.deniedDomains?.join(", ") || "(none)"}`,
+						"",
+						`denyRead:   ${config.filesystem?.denyRead?.join(", ") || "(none)"}`,
+						`allowWrite: ${config.filesystem?.allowWrite?.join(", ") || "(none)"}`,
+						`denyWrite:  ${config.filesystem?.denyWrite?.join(", ") || "(none)"}`,
+					];
+					ctx.ui.notify(lines.join("\n"), "info");
+					return;
+				}
+				case "on": {
+					await reinit({ ...config, enabled: true }, "enabled");
+					return;
+				}
+				case "off": {
+					await reinit({ ...config, enabled: false }, "disabled");
+					return;
+				}
+				case "allow-domain": {
+					if (!arg) return ctx.ui.notify("usage: /sandbox allow-domain <domain>", "warning");
+					const domains = new Set([...(config.network?.allowedDomains ?? []), arg]);
+					await reinit({ ...config, network: { ...config.network, allowedDomains: [...domains] } }, `allowed domain ${arg}`);
+					return;
+				}
+				case "allow-path": {
+					if (!arg) return ctx.ui.notify("usage: /sandbox allow-path <path>", "warning");
+					const paths = new Set([...(config.filesystem?.allowWrite ?? []), arg]);
+					await reinit({ ...config, filesystem: { ...config.filesystem, allowWrite: [...paths] } }, `allowed write path ${arg}`);
+					return;
+				}
+				case "violations": {
+					const store = SandboxManager.getSandboxViolationStore();
+					const items = store.getViolations(20);
+					if (items.length === 0) {
+						ctx.ui.notify(`no violations recorded (total ${store.getTotalCount()})`, "info");
+						return;
+					}
+					const lines = items.map((v) => {
+						const line = String((v as { line?: string }).line ?? JSON.stringify(v)).slice(0, 160);
+						return `- ${line}`;
+					});
+					ctx.ui.notify(`violations (${store.getTotalCount()} total, showing ${items.length}):\n${lines.join("\n")}`, "warning");
+					return;
+				}
+				default:
+					ctx.ui.notify(`Unknown arg '${cmd}'. Use: status | on | off | allow-domain <d> | allow-path <p> | violations`, "warning");
 			}
-			if (arg === "status") {
-				ctx.ui.notify(`Sandbox mode: ${mode} · allowlist: ${allowed.size} path(s)`, "info");
-				return;
-			}
-			if (arg) {
-				ctx.ui.notify(`Unknown arg '${arg}'. Use: ask | bypass | status | clear`, "warning");
-				return;
-			}
-
-			const choice = await ctx.ui.select("Sandbox mode（项目根以外的写入）", [
-				"需要审批 (ask)",
-				"不需要审批 (bypass)",
-			]);
-			if (choice === "需要审批 (ask)") setMode("ask");
-			else if (choice === "不需要审批 (bypass)") setMode("bypass");
 		},
 	});
 }
