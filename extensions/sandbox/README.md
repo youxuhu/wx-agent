@@ -12,7 +12,7 @@ now lives in the `policy` extension.
 
 ```json
 {
-  "enabled": false,
+  "enabled": true,
   "network": {
     "allowedDomains": ["open.bigmodel.cn", "github.com", "*.github.com", "registry.npmjs.org", "*.npmjs.org"],
     "deniedDomains": [],
@@ -31,21 +31,26 @@ Legacy `{ "mode": "bypass" | "ask", "allowedPaths": [...] }` is migrated on load
 (`bypass` → `enabled:false`, `ask` → `enabled:true`, paths appended to `allowWrite`);
 the old file is kept as `sandbox.json.legacy.bak`.
 
-## Measured behaviour on this machine (2026-09-23)
+## Measured behaviour (2026-10-03, async execution)
 
 | Check | Result |
 |---|---|
 | write inside cwd / `/tmp` / `~/.pi` | allowed |
-| write + read `~/.ssh` | denied (`Operation not permitted`) |
-| esbuild, node, osascript inside sandbox | work |
-| `screencapture` inside sandbox | fails — macOS denies screen-recording TCC to sandboxed processes |
-| `git ls-remote` (allowlisted) | works |
-| `curl` / `npm` (allowlisted) | **hang** — the sandbox MITM proxy cannot reach upstream through the local transparent proxy |
+| read + write `~/.ssh` | denied (`Operation not permitted`) |
+| allowlisted egress: `curl https://api.github.com`, `npm install`, `git ls-remote` | works |
+| non-allowlisted egress: `curl https://example.com` | blocked (`CONNECT tunnel failed, response 403`) |
+| provider host reachable | yes (`open.bigmodel.cn` → 401 without auth = reached) |
+| esbuild / node / osascript / `pi` CLI inside the sandbox | work |
+| `screencapture` inside the sandbox | fails — macOS does not grant screen-recording (TCC) to sandboxed processes |
 
-Because of that last row the default is `enabled: false`: turning it on gives a
-**sealed** shell (filesystem-protected; outbound HTTP from bash effectively blocked).
-`parentProxy`, `mitmProxy:false` and `tlsTerminate:false` were all tried and did not
-change it.
+**Important when writing your own tests:** run sandboxed commands **asynchronously**
+(`spawn`). The proxy lives in the host process, so a synchronous harness (`spawnSync`)
+blocks the event loop and makes every proxied request look like a timeout. That
+artefact was the cause of an earlier, incorrect "network layer unusable" conclusion.
+
+`/sandbox violations` lists denials (each blocked domain/path is recorded), and
+`/sandbox allow-domain <d>` / `/sandbox allow-path <p>` widen the policy when a
+legitimate command needs it.
 
 ## Commands
 

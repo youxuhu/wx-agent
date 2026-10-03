@@ -25,10 +25,10 @@
  * Commands: /sandbox [status | on | off | allow-domain <d> | allow-path <p> | violations]
  * Flag:     --no-sandbox  (disable for this run)
  *
- * Measured limitation (this machine, 2026-09-23): filesystem policy is enforced for
- * every bash child; the sandbox network proxy cannot reach upstream through the
- * local transparent proxy, so outbound curl/npm hang while enabled. Default is off;
- * `/sandbox on` gives a sealed, filesystem-protected shell.
+ * Measured (2026-10-03): filesystem policy enforced for every bash child (writes
+ * outside allowWrite and reads of denyRead paths are denied); allowlisted egress works
+ * (curl/npm/git) and non-allowlisted egress is blocked. `/sandbox violations` shows
+ * denials; `/sandbox allow-domain <d>` / `allow-path <p>` widen the policy.
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
@@ -52,12 +52,12 @@ function expandPath(p: string): string {
 }
 
 const DEFAULT_CONFIG: SandboxConfig = {
-	// Measured on this machine (2026-09-23): the filesystem policy is enforced and
-	// works; the sandbox's network MITM proxy cannot reach upstream through the
-	// local transparent proxy (Clash), so curl/npm hang while sandboxed. Default is
-	// therefore OFF — enable per session with `/sandbox on` when you want a sealed
-	// filesystem-protected shell and do not need outbound HTTP from it.
-	enabled: false,
+	// Filesystem and network policy are enforced for bash and all of its children.
+	// Measured 2026-10-03: allowlisted egress works (curl 200, npm install, git ls-remote),
+	// non-allowlisted egress is blocked, writes outside allowWrite and reads of denyRead
+	// path are denied. Note: a synchronous test harness (spawnSync) blocks the host
+	// process that hosts the proxy and makes egress look broken — real usage is async.
+	enabled: true,
 	network: {
 		allowedDomains: [
 			// model provider in use (see ~/.pi/agent/models-store.json)
