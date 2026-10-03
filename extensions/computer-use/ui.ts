@@ -15,7 +15,7 @@ export const BRIEFING = `── computer 操作手册（首次调用附赠，此
 观察分级: tree(默认,纯文本控件树,0图像成本) | full(截图+树,关键节点自动触发) | minimal
 截图时机: 任务开始/焦点切换/页面跳转/blocked/每10动作心跳；其余时刻用控件树定位
 坐标: element index 优先；pixel 仅兜底，须落在最近截图 raster 内
-聚焦: action:"activate" + app 参数把目标 App 调到前台（防遮挡/防输入错窗）
+聚焦: action:"activate" + app 打开/置顶目标 App 一步到位（未运行自动启动；防遮挡/防输入错窗）
 停止: 连续3次无变化或 blocked 时必须换路径或向用户汇报，勿重复同一动作
 权限: ask 模式每动作弹确认；/cua bypass 免确认
 更多: action:"help"`;
@@ -28,12 +28,14 @@ screenshot            显式截图；返回 full 观察（截图+控件树+窗�
 left_click            左键单击目标（element index 优先，x/y 兜底）
 double_click          左键双击
 right_click           右键单击
-type   + text         键入文本，产生真实键盘事件（与物理输入等效）；换行=Return
+type   + text         键入文本，产生真实键盘事件（CGEvent 通道，IME 免疫，与物理输入等效）；换行=Return
 key    + text         组合键，如 "cmd+c" / "enter" / "tab"
 scroll + up|down      滚轮滚动，amount 默认 3
 wait   + ms           等待 100..10000 毫秒（不产生观察）
 list_windows          仅窗口清单（不截图）
-activate + app        把目标 App（名称或 bundleId）调到前台；返回 full 观察
+activate + app        打开/切换 App 一步到位：未运行自动启动，最小化自动恢复，置顶；返回 full 观察。
+                      本地化名打不开时（如中文 App 名）：用 list_apps 查名单后按英文名/bundleId 重试
+list_apps             已安装应用名单（名称/bundleId/路径），纯文本；语义匹配（如 音乐→Music）自己做
 help                  返回本手册
 
 == 观察分级 (§1) ==
@@ -51,8 +53,9 @@ minimal = 一行状态回执（hash + 焦点窗口），用于 3 秒内重复的
 
 == 动态内容观察 ==
 状态随时间变化的界面（计数/时间戳/进度类文本）：两次观察比对 stateHash / 树指纹 /
-时间戳类文本即可确认是否变化；wait 动作 0 成本。type 产生真实键盘事件（v3.4 起），
-app 侧依赖键事件的机制自然触发；观察是否生效同样用两次观察比对。
+时间戳类文本即可确认是否变化；wait 动作 0 成本。type 产生真实键盘事件（v3.5 起统一
+CGEvent 通道，中文输入法开启时同样可靠），app 侧依赖键事件的机制自然触发；
+观察是否生效同样用两次观察比对。
 
 == 坐标系 (§3) ==
 full 观察的截图坐标 = raster 系（图片实际像素）；tree 观察的控件坐标 = logical 系

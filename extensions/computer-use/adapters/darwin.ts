@@ -200,6 +200,7 @@ var ok = false
 var pid: Int32 = -1
 var appName = ""
 var bundleId = ""
+var winCount = 0
 if let a = best {
   var opts: NSApplication.ActivationOptions = [.activateAllWindows]
   ok = a.activate(options: opts)
@@ -214,12 +215,18 @@ if let a = best {
     let axErr = AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute as CFString, &winsRef)
     if axErr == .success, let wins = winsRef as? [AXUIElement] {
       for w in wins {
+        // v3.5: count on-screen (non-minimized) windows so the TS side can
+        // distinguish "frontmost but windowless" (needs launch) from ready.
+        var minRef: CFTypeRef?
+        let mErr = AXUIElementCopyAttributeValue(w, kAXMinimizedAttribute as CFString, &minRef)
+        let isMin = (mErr == .success) && ((minRef as? Bool) == true)
+        if !isMin { winCount += 1 }
         AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
       }
     }
   }
 }
-let result: [String: Any] = ["ok": ok, "pid": pid, "appName": appName, "bundleId": bundleId]
+let result: [String: Any] = ["ok": ok, "pid": pid, "appName": appName, "bundleId": bundleId, "windows": winCount]
 let d = try! JSONSerialization.data(withJSONObject: result)
 print(String(data: d, encoding: .utf8)!)
 `;
@@ -232,6 +239,31 @@ function runSwift(script: string, timeoutMs = SWIFT_TIMEOUT_MS, env?: NodeJS.Pro
 	}
 	return r.stdout;
 }
+
+/**
+ * v3.5 §2.1: list installed apps (name/bundleId/path) — pure fact for the model.
+ * Localized display names are NOT statically in the bundles (e.g. only LaunchServices
+ * knows "音乐"→Music at runtime), so semantic matching of a user's localized name to
+ * an entry is the LLM's job (world knowledge), not code's. Feeds the list_apps action
+ * and the activate-failure factual hint.
+ */
+const LIST_APPS_SWIFT = `
+import Foundation
+let fm = FileManager.default
+var out: [[String: String]] = []
+let dirs = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "/Applications/Utilities", NSString("~/Applications").expandingTildeInPath]
+for dir in dirs {
+  for e in (try? fm.contentsOfDirectory(atPath: dir)) ?? [] where e.hasSuffix(".app") {
+    let path = dir + "/" + e
+    let b = Bundle(path: path)
+    let name = (b?.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? ((e as NSString).deletingPathExtension)
+    let bid = b?.bundleIdentifier ?? ""
+    out.append(["name": name, "bundleId": bid, "path": path])
+  }
+}
+let d = try! JSONSerialization.data(withJSONObject: ["ok": true, "apps": out])
+print(String(data: d, encoding: .utf8)!)
+`
 
 /**
  * v3.4 §1.1: typeUnicode — real keyboard events for arbitrary Unicode text (CJK, emoji…).
@@ -431,35 +463,52 @@ export function createAdapter(): PlatformAdapter {
 		},
 
 		/**
-		 * B2/B4 (PLAN §2.2/§2.4): activate an app by name or bundleId.
-		 * Order: NSRunningApplication(pid).activate() → open -b <bundleId> → open -a <name>.
+		 * B2/B4 (PLAN §2.2/§2.4) + v3.5 §2 (B6 closed): activate = open + foreground in one step.
+		 * Loop: ACTIVATE_SWIFT (frontmost + un-minimize + on-screen window count).
+		 * ok && windows>0 → done. First miss (not running / windowless) → launch via
+		 * `open -a <name>` (or osascript activate — LaunchServices resolves localized
+		 * names that open(1) rejects, e.g. "音乐"), then keep polling ≤ ~6s.
+		 * Final fallbacks: open -b <bundleId>.
 		 */
 		async activateApp(target: string): Promise<void> {
 			const t = target.trim();
 			if (!t) throw new Error("activateApp: empty target");
-			// NSRunningApplication.activate can transiently return false when the
-			// caller is a background process (macOS activation race) — retry once
-			// with [.activateAllWindows], then fall through to open(1) fallbacks.
-			for (const force of ["", "1"]) {
+			const launch = (): boolean => {
+				if (spawnSync("open", ["-a", t], { timeout: SWIFT_TIMEOUT_MS }).status === 0) return true;
+				// open(1) rejects localized names ("音乐") — try LaunchServices via osascript.
+				return spawnSync("osascript", ["-e", `tell application "${t}" to activate`], { timeout: SWIFT_TIMEOUT_MS }).status === 0;
+			};
+			let launched = false;
+			for (let i = 0; i < 10; i++) {
 				try {
-					const r = runSwiftJSON<{ ok: boolean; pid: number }>(ACTIVATE_SWIFT, SWIFT_TIMEOUT_MS, {
+					const r = runSwiftJSON<{ ok: boolean; pid: number; windows: number }>(ACTIVATE_SWIFT, SWIFT_TIMEOUT_MS, {
 						CUA_TARGET: t,
-						CUA_FORCE: force,
 					});
-					if (r.ok) return;
+					if (r.ok && r.windows > 0) return;
 				} catch {
 					break; // swift itself failed (compile/runtime) — open(1) fallbacks
 				}
-				await new Promise((res) => setTimeout(res, 300));
+				if (!launched) {
+					launched = true;
+					if (!launch()) throw new Error(`activateApp: no running app matched '${t}' and launch failed (open -a / osascript). The name may be a localized display name — list_apps returns installed app names/bundleIds.`); // fail fast + factual pointer
+				}
+				await new Promise((res) => setTimeout(res, 500));
 			}
 			const tryOpen = (args: string[]): boolean => {
 				const r = spawnSync("open", args, { timeout: SWIFT_TIMEOUT_MS });
 				return r.status === 0;
 			};
 			if (t.includes(".") && tryOpen(["-b", t])) return;
+			if (!launched && launch()) return;
 			if (tryOpen(["-a", t])) return;
 			if (!t.includes(".") && tryOpen(["-b", t])) return;
 			throw new Error(`activateApp: could not activate '${t}'`);
+		},
+
+		/** v3.5 §2.1: installed app list (pure fact; LLM matches localized names itself). */
+		async listApps(): Promise<{ name: string; bundleId: string; path: string }[]> {
+			const r = runSwiftJSON<{ ok: boolean; apps: { name: string; bundleId: string; path: string }[] }>(LIST_APPS_SWIFT, SWIFT_TIMEOUT_MS);
+			return r.apps ?? [];
 		},
 
 		/** §3: Swift AX dump → raw JSON tree (logical screen coordinates). */
@@ -492,17 +541,16 @@ export function createAdapter(): PlatformAdapter {
 		},
 
 /**
- * v3.4 §1.2 dispatch:
- *   ASCII mappable → per-character pressKey (B1 path, verified).
- *   non-ASCII      → typeUnicode (CGEvent real key events, new main path);
- *                    on failure → clipboard paste + cmd+v fallback (clipboard
- *                    saved/restored around the paste, as before).
- * Segments split on "\n" (Return pressed between); any segment >80 chars or a
- * typeUnicode failure routes the WHOLE text through the clipboard fallback to
- * avoid partial double-typing.
+ * v3.5 §1: ALL text goes through typeUnicode — per-character pressKey is
+ * unreliable under CJK IMEs (virtual-key events get swallowed into the IME
+ * composition buffer; live evidence: an ASCII query was lost entirely /
+ * reduced to a stray space while CGEvent unicode events landed verbatim).
+ * typeUnicode failure routes the WHOLE text through the clipboard fallback
+ * (paste + cmd+v, clipboard saved/restored) to avoid partial double-typing.
+ * Segments split on "\n" (Return pressed between); any segment >80 chars goes
+ * straight to the clipboard fallback.
  */
 		async typeText(t: string): Promise<void> {
-			const m = await nut();
 			const clipboardFallback = async (): Promise<void> => {
 				const prev = spawnSync("pbpaste", { encoding: "utf8", timeout: 3_000 }).stdout ?? "";
 				const copy = spawnSync("pbcopy", { input: t, timeout: 3_000 });
@@ -511,51 +559,31 @@ export function createAdapter(): PlatformAdapter {
 				await new Promise((r) => setTimeout(r, 150));
 				if (prev) spawnSync("pbcopy", { input: prev, timeout: 3_000 });
 			};
-			const asciiOnly = /^[\x20-\x7E]*$/.test(t);
-			if (!asciiOnly) {
-				const segments = t.split("\n");
-				if (segments.every((s) => s.length <= 80)) {
-					for (let i = 0; i < segments.length; i++) {
-						if (i > 0) await this.pressKey("enter");
-						if (segments[i].length === 0) continue; // "\n\n" ⇒ consecutive Return
-						let posted = -1;
-						try {
-							const r = runSwiftJSON<{ ok: boolean; posted: number }>(TYPE_UNICODE_SWIFT, SWIFT_TIMEOUT_MS, {
-								CUA_TEXT: segments[i],
-							});
-							if (r.ok) posted = r.posted;
-						} catch {
-							/* swift failed to spawn/compile — clipboard fallback below */
-						}
-						if (posted === [...segments[i]].length) continue;
-						if (posted > 0) {
-							// Partial injection (2s cap): real keys already went out — a
-							// paste would double-type the remainder. Surface it instead.
-							throw new Error(`typeText: typeUnicode partially posted ${posted}/${segments[i].length} chars`);
-						}
-						await clipboardFallback(); // typeUnicode produced nothing → paste
-						return;
-					}
-					return;
-				}
+			const segments = t.split("\n");
+			if (segments.some((s) => [...s].length > 80)) {
 				await clipboardFallback();
 				return;
 			}
-			for (const ch of t) {
-				if (ch === "\n") {
-					await m.keyboard.pressKey(m.Key.Return);
-					continue;
+			for (let i = 0; i < segments.length; i++) {
+				if (i > 0) await this.pressKey("enter");
+				if (segments[i].length === 0) continue; // "\n\n" ⇒ consecutive Return
+				let posted = -1;
+				try {
+					const r = runSwiftJSON<{ ok: boolean; posted: number }>(TYPE_UNICODE_SWIFT, SWIFT_TIMEOUT_MS, {
+						CUA_TEXT: segments[i],
+					});
+					if (r.ok) posted = r.posted;
+				} catch {
+					/* swift failed to spawn/compile — clipboard fallback below */
 				}
-				if (/[A-Z]/.test(ch)) {
-					const k = mapKey(ch.toLowerCase());
-					if (typeof k === "number") {
-						await m.keyboard.pressKey(m.Key.LeftShift, k as import("@nut-tree-fork/nut-js").Key);
-						continue;
-					}
+				if (posted === [...segments[i]].length) continue;
+				if (posted > 0) {
+					// Partial injection (2s cap): real keys already went out — a
+					// paste would double-type the remainder. Surface it instead.
+					throw new Error(`typeText: typeUnicode partially posted ${posted}/${segments[i].length} chars`);
 				}
-				const k = mapKey(ch);
-				if (typeof k === "number") await m.keyboard.pressKey(k as import("@nut-tree-fork/nut-js").Key);
-				else await m.keyboard.type(ch); // unmappable ASCII edge — single-char fallback
+				await clipboardFallback(); // typeUnicode produced nothing → paste
+				return;
 			}
 		},
 

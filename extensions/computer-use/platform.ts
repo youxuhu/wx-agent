@@ -67,6 +67,8 @@ export interface PlatformAdapter {
 	frontmostApp(): Promise<FrontAppInfo | null>;
 	/** B2/B4 (PLAN §2.2/§2.4): activate an app to the foreground (name or bundleId). */
 	activateApp(target: string): Promise<void>;
+	/** v3.5 §2.1: installed apps (name/bundleId/path) — pure fact for the model. */
+	listApps(): Promise<{ name: string; bundleId: string; path: string }[]>;
 	/** Main display raster size of the last/current capture and logical size, for Retina conversion. */
 	screenSize(): Promise<{ raster: { width: number; height: number }; logical: { width: number; height: number } }>;
 	screenshot(): Promise<ScreenshotResult>;
@@ -140,6 +142,7 @@ export function unsupportedAdapter(platform: SupportedPlatform, note: string, ph
 		},
 		frontmostApp: err,
 		activateApp: err,
+		listApps: err,
 		screenSize: err,
 		screenshot: err,
 		listWindows: err,

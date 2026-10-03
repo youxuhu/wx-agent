@@ -167,6 +167,7 @@ export default function computerUse(pi: ExtensionAPI): void {
 				Type.Literal("scroll"),
 				Type.Literal("wait"),
 				Type.Literal("list_windows"),
+				Type.Literal("list_apps"),
 				Type.Literal("activate"),
 				Type.Literal("help"),
 			]),
@@ -254,6 +255,12 @@ export default function computerUse(pi: ExtensionAPI): void {
 					case "screenshot":
 					case "list_windows":
 						break; // handled by the observation step below
+					case "list_apps": {
+						// v3.5 §2.1: pure fact (name/bundleId/path) — matching a localized
+						// name like 音乐 → Music is the model's job (world knowledge).
+						const apps = await adapter.listApps();
+						return { content: [{ type: "text", text: apps.map((a) => `${a.name}\t${a.bundleId}\t${a.path}`).join("\n") }] };
+					}
 					case "wait": {
 						const ms = Math.min(10_000, Math.max(100, Math.floor(params.ms ?? 1000)));
 						await new Promise((r) => setTimeout(r, ms));
