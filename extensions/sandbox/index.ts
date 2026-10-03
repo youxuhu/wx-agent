@@ -42,6 +42,10 @@ interface SandboxConfig extends SandboxRuntimeConfig {
 	enabled?: boolean;
 	ignoreViolations?: Record<string, string[]>;
 	enableWeakerNestedSandbox?: boolean;
+	/** command substrings that run OUTSIDE the sandbox (e.g. screencapture: macOS never grants
+	 *  screen-recording TCC to a seatbelt-sandboxed process). Documented, config-driven, and
+	 *  reported as a fact when it happens. */
+	unsandboxedCommands?: string[];
 }
 const CONFIG_PATH = join(getAgentDir(), "sandbox.json");
 
@@ -58,6 +62,9 @@ const DEFAULT_CONFIG: SandboxConfig = {
 	// path are denied. Note: a synchronous test harness (spawnSync) blocks the host
 	// process that hosts the proxy and makes egress look broken — real usage is async.
 	enabled: true,
+	// screencapture cannot work inside the sandbox: macOS never grants screen-recording
+	// (TCC/WindowServer) to a sandboxed process, so it runs unsandboxed by default.
+	unsandboxedCommands: ["screencapture"],
 	network: {
 		allowedDomains: [
 			// model provider in use (see ~/.pi/agent/models-store.json)
@@ -93,6 +100,7 @@ function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): Sand
 	if (overrides.filesystem) result.filesystem = { ...base.filesystem, ...overrides.filesystem };
 	if (overrides.ignoreViolations) result.ignoreViolations = overrides.ignoreViolations;
 	if (overrides.enableWeakerNestedSandbox !== undefined) result.enableWeakerNestedSandbox = overrides.enableWeakerNestedSandbox;
+	if (Array.isArray(overrides.unsandboxedCommands)) result.unsandboxedCommands = overrides.unsandboxedCommands;
 	return result;
 }
 
@@ -203,6 +211,17 @@ export default function (pi: ExtensionAPI) {
 	let sandboxEnabled = false;
 	let sandboxInitialized = false;
 	let lastError: string | undefined;
+	let activeConfig: SandboxConfig = DEFAULT_CONFIG;
+	const bypassReported = new Set<string>();
+
+	/** Commands explicitly configured to run outside the sandbox (documented, reported as a fact). */
+	const bypassedCommand = (command: string): string | undefined => {
+		if (!sandboxEnabled) return undefined;
+		for (const pattern of activeConfig.unsandboxedCommands ?? []) {
+			if (pattern && command.includes(pattern)) return pattern;
+		}
+		return undefined;
+	};
 
 	const statusText = () => {
 		if (!sandboxEnabled) return lastError ? `🔓 Sandbox off (${lastError})` : "🔓 Sandbox off";
@@ -220,13 +239,24 @@ export default function (pi: ExtensionAPI) {
 			if (!sandboxEnabled || !sandboxInitialized) {
 				return localBash.execute(id, params, signal, onUpdate, ctx);
 			}
+			const command = typeof (params as { command?: unknown }).command === "string" ? (params as { command: string }).command : "";
+			const bypass = bypassedCommand(command);
+			if (bypass) {
+				if (!bypassReported.has(bypass)) {
+					bypassReported.add(bypass);
+					ctx.ui.notify(`sandbox: '${bypass}' ran outside the sandbox (unsandboxedCommands in sandbox.json)`, "warning");
+				}
+				return localBash.execute(id, params, signal, onUpdate, ctx);
+			}
 			const sandboxedBash = createBashTool(localCwd, { operations: createSandboxedBashOps() });
 			return sandboxedBash.execute(id, params, signal, onUpdate, ctx);
 		},
 	});
 
-	pi.on("user_bash", () => {
+	pi.on("user_bash", (event) => {
 		if (!sandboxEnabled || !sandboxInitialized) return;
+		const command = typeof (event as { command?: unknown }).command === "string" ? (event as { command: string }).command : "";
+		if (bypassedCommand(command)) return; // user ran something on the unsandboxed list
 		return { operations: createSandboxedBashOps() };
 	});
 
@@ -250,6 +280,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		const config = loadConfig(ctx.cwd);
+		activeConfig = config;
 		if (config.enabled === false) {
 			sandboxEnabled = false;
 			lastError = "disabled via config";
@@ -264,6 +295,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		try {
 			await initialize(config);
+			activeConfig = config;
 			ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", statusText()));
 		} catch (err) {
 			sandboxEnabled = false;
@@ -299,12 +331,14 @@ export default function (pi: ExtensionAPI) {
 				}
 				sandboxInitialized = false;
 				if (next.enabled === false) {
+					activeConfig = next;
 					sandboxEnabled = false;
 					ctx.ui.setStatus("sandbox", undefined);
 					ctx.ui.notify(`${note}; sandbox disabled`, "info");
 					return;
 				}
 				await initialize(next);
+				activeConfig = next;
 				ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", statusText()));
 				ctx.ui.notify(`${note}; sandbox re-initialized`, "info");
 			};
@@ -323,6 +357,8 @@ export default function (pi: ExtensionAPI) {
 						`denyRead:   ${config.filesystem?.denyRead?.join(", ") || "(none)"}`,
 						`allowWrite: ${config.filesystem?.allowWrite?.join(", ") || "(none)"}`,
 						`denyWrite:  ${config.filesystem?.denyWrite?.join(", ") || "(none)"}`,
+						"",
+						`run outside the sandbox: ${config.unsandboxedCommands?.join(", ") || "(none)"}`,
 					];
 					ctx.ui.notify(lines.join("\n"), "info");
 					return;
@@ -347,6 +383,18 @@ export default function (pi: ExtensionAPI) {
 					await reinit({ ...config, filesystem: { ...config.filesystem, allowWrite: [...paths] } }, `allowed write path ${arg}`);
 					return;
 				}
+				case "allow-unsandboxed": {
+					if (!arg) return ctx.ui.notify("usage: /sandbox allow-unsandboxed <command substring>", "warning");
+					const list = new Set([...(config.unsandboxedCommands ?? []), arg]);
+					await reinit({ ...config, unsandboxedCommands: [...list] }, `'${arg}' now runs outside the sandbox`);
+					return;
+				}
+				case "deny-unsandboxed": {
+					if (!arg) return ctx.ui.notify("usage: /sandbox deny-unsandboxed <command substring>", "warning");
+					const list = (config.unsandboxedCommands ?? []).filter((c) => c !== arg);
+					await reinit({ ...config, unsandboxedCommands: list }, `'${arg}' removed from the unsandboxed list`);
+					return;
+				}
 				case "violations": {
 					const store = SandboxManager.getSandboxViolationStore();
 					const items = store.getViolations(20);
@@ -362,7 +410,7 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				default:
-					ctx.ui.notify(`Unknown arg '${cmd}'. Use: status | on | off | allow-domain <d> | allow-path <p> | violations`, "warning");
+					ctx.ui.notify(`Unknown arg '${cmd}'. Use: status | on | off | allow-domain <d> | allow-path <p> | allow-unsandboxed <c> | deny-unsandboxed <c> | violations`, "warning");
 			}
 		},
 	});
