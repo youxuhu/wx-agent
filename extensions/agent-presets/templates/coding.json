@@ -20,5 +20,6 @@
       "title": "review",
       "taskTemplate": "Review the implementation above against the goal.\n\nGoal: {{goal}}\n\nCheck correctness, tests, edge cases, and unnecessary complexity. Report blocking issues with file:line evidence and non-blocking observations separately. You are a fresh context: verify claims against the repository yourself.\n\nImplementation report:\n{{upstream}}"
     }
-  ]
+  ],
+  "description": "code change: recon, implement, independent review"
 }

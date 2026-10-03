@@ -20,5 +20,6 @@
       "title": "advisor",
       "taskTemplate": "Adjudicate the review findings below. Do not edit files.\n\nGoal: {{goal}}\n\nBuild report and review findings:\n{{upstream}}\n\nFor each blocking issue: is it real, and what is the minimal correct fix direction? State which findings should be rejected, with reasons. Mark anything you could not verify."
     }
-  ]
+  ],
+  "description": "an existing change that needs more eyes: implement, review, adjudicate"
 }
