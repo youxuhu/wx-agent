@@ -14,6 +14,7 @@ import type { ExtensionAPI, ExtensionContext, ImageContent, TextContent } from "
 import { ProgressController } from "./controller";
 import {
 	buildWidgetIndex,
+	findElement,
 	decideLevel,
 	detectBlocked,
 	treeChangedFraction,
@@ -43,6 +44,8 @@ interface SessionState {
 	widgetIndex: Map<number, Point>;
 	lastRaster: { width: number; height: number };
 	lastLogical: { width: number; height: number };
+	lastTree: WidgetNode | null; // v3.2: name-based element lookup
+	lastApp: string; // v3.2: app that owns the last observation (auto-activate target)
 	round: number;
 	// v3.1 tiered-observation state
 	briefingDone: boolean; // L1: briefing shown once per session (§4.3)
@@ -64,6 +67,8 @@ const state: SessionState = {
 	lastWindows: [],
 	knownWindows: null,
 	widgetIndex: new Map(),
+	lastTree: null,
+	lastApp: "",
 	lastRaster: { width: 0, height: 0 },
 	lastLogical: { width: 0, height: 0 },
 	round: 0,
@@ -199,8 +204,30 @@ export default function computerUse(pi: ExtensionAPI): void {
 			const pre = state.controller.precheck(action);
 			if (!pre.ok) return err(pre.reason);
 
+			// User directive: 操作 App 前先把它调到前台（防遮挡/防点错窗）。
+			// If focus drifted away from the app that owns the last observation,
+			// re-activate it before any mutating action.
+			const ensureFocused = async (): Promise<void> => {
+				if (!state.lastApp) return;
+				try {
+					const front = await adapter.frontmostApp();
+					if (front && front.appName && front.appName !== state.lastApp) {
+						await adapter.activateApp(state.lastApp);
+						await new Promise((r) => setTimeout(r, 400));
+					}
+				} catch { /* best-effort */ }
+			};
+
 			// target resolution (element preferred — logical space; x/y fallback — raster space)
 			const resolveTarget = (): { target: string; point: Point; space: "raster" | "logical" } | { error: string } => {
+				if (params.elementName !== undefined) {
+					const hit = findElement(state.lastTree, params.elementName);
+					if (!hit) {
+						const n = state.widgetIndex.size;
+						return { error: `elementName "${params.elementName}" not found in the last widget tree (${n} indexed widgets). Take action:"screenshot" to refresh the tree, or use element index / x,y.` };
+					}
+					return { target: `name:"${hit.node.label.slice(0, 24)}"`, point: { ...hit.node.center }, space: "logical" };
+				}
 				if (params.element !== undefined) {
 					const el = Math.floor(params.element);
 					const p = elementToPoint(el);
@@ -251,12 +278,14 @@ export default function computerUse(pi: ExtensionAPI): void {
 					}
 					case "type": {
 						if (params.text === undefined) return err(`computer: type requires text`);
+						await ensureFocused();
 						target = `type "${params.text.slice(0, 24)}"`;
 						await adapter.typeText(params.text);
 						break;
 					}
 					case "key": {
 						if (params.text === undefined) return err(`computer: key requires text (e.g. "cmd+c")`);
+						await ensureFocused();
 						target = `key ${params.text}`;
 						await adapter.pressKey(params.text);
 						break;
@@ -264,10 +293,16 @@ export default function computerUse(pi: ExtensionAPI): void {
 					case "scroll": {
 						const direction = params.direction ?? "down";
 						const amount = Math.max(1, Math.floor(params.amount ?? 3));
+						await ensureFocused();
 						let at: Point | undefined;
-						if (params.element !== undefined) at = elementToPoint(Math.floor(params.element));
+						if (params.elementName !== undefined) {
+							const hit = findElement(state.lastTree, params.elementName);
+							if (hit) at = { ...hit.node.center };
+							target = `name:"${hit ? hit.node.label.slice(0, 24) : params.elementName}"`;
+						}
+						else if (params.element !== undefined) at = elementToPoint(Math.floor(params.element));
 						else if (params.x !== undefined && params.y !== undefined) at = rasterToLogical({ x: params.x, y: params.y });
-						if (params.element !== undefined) target = `element:${Math.floor(params.element)}`;
+						if (params.elementName === undefined && params.element !== undefined) target = `element:${Math.floor(params.element)}`;
 						else if (params.x !== undefined && params.y !== undefined) target = `${Math.floor(params.x)},${Math.floor(params.y)}`;
 						await adapter.scroll(direction, amount, at);
 						break;
@@ -381,6 +416,8 @@ export default function computerUse(pi: ExtensionAPI): void {
 					return err(`observation failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
 				}
 				state.widgetIndex = buildWidgetIndex(obs.widgetTree ?? null);
+				state.lastTree = obs.widgetTree ?? null;
+				state.lastApp = obs.frontApp?.appName ?? state.lastApp;
 				state.knownWindows = new Set(obs.windows.map(windowKey));
 			}
 

@@ -42,6 +42,13 @@ full    = 截图 + 控件树 + 窗口清单。自动触发：任务首个观察 
 tree    = 控件树 + 窗口清单，纯文本 0 图像 token（默认）。
 minimal = 一行状态回执（hash + 焦点窗口），用于 3 秒内重复的 (action,target)。
 
+== 定位优先级 (v3.2) ==
+1. elementName:按控件名匹配（精确>前缀>包含，可点优先）——首选，免索引免坐标；
+   例: left_click elementName:"播放" / elementName:"搜索"
+2. element index:树里的编号（elementName 找不到或同名多个时用）
+3. x/y 像素:最后手段，只能用于最近截图 raster 系
+自动置顶:动作前若焦点漂移到别的 App，扩展会自动把上次观察的 App 调回前台（防遮挡/防点错窗）。
+
 == 播放器/网页应用技巧 ==
 视频/音频站点的播放器控件几乎总在 a11y 树里：先 list 一次树，找 Button "播放/暂停"、
 时间戳 StaticText（如 "01:16 / 03:48"）、倍速/全屏等，直接 element index 点击，无需截图猜坐标。

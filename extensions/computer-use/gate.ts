@@ -256,3 +256,34 @@ export function detectBlocked(input: {
 export function windowKey(w: WindowInfo): string {
 	return `${w.appName}::${w.title}`;
 }
+
+/**
+ * Name-based widget lookup (user directive: 控件名匹配优先，坐标兜底).
+ * Scoring: exact label 4 > startsWith 3 > includes 2; +1 when clickable.
+ * Returns the best match or null; coordinates come from node.center (logical space).
+ */
+export function findElement(
+	root: WidgetNode | null | undefined,
+	query: string,
+): { node: WidgetNode; score: number } | null {
+	if (!root) return null;
+	const q = query.trim().toLowerCase();
+	if (!q) return null;
+	let best: { node: WidgetNode; score: number } | null = null;
+	const walk = (n: WidgetNode): void => {
+		const label = (n.label || "").trim().toLowerCase();
+		if (label) {
+			let score = 0;
+			if (label === q) score = 4;
+			else if (label.startsWith(q)) score = 3;
+			else if (label.includes(q)) score = 2;
+			if (score > 0) {
+				if (n.clickable) score += 1;
+				if (!best || score > best.score) best = { node: n, score };
+			}
+		}
+		for (const c of n.children) walk(c);
+	};
+	walk(root);
+	return best;
+}
