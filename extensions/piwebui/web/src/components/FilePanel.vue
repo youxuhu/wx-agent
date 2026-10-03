@@ -1,10 +1,19 @@
 <script setup lang="ts">
 /** Read-only project tree with git status letters. Native controls only. */
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { renderMarkdown } from "../markdown.ts";
 import { useSessionStore } from "../stores/session.ts";
 
 const store = useSessionStore();
 const MAX_DEPTH = 6;
+/** Markdown files can be shown rendered or raw; rendering escapes all source text first. */
+const mode = ref<"rendered" | "raw">("rendered");
+
+const isMarkdown = computed(() => {
+	const path = store.fileView?.path ?? "";
+	return /\.(md|markdown|mdx)$/i.test(path);
+});
+const rendered = computed(() => (store.fileView ? renderMarkdown(store.fileView.text) : ""));
 
 interface Row {
 	name: string;
@@ -44,6 +53,7 @@ function statusLabel(path: string): string {
 }
 
 function onRow(row: Row): void {
+	mode.value = "rendered";
 	if (row.type === "dir" || row.type === "symlink") store.toggleDir(row.path);
 	else store.openFileAt(row.path);
 }
@@ -102,7 +112,12 @@ watch(
 				<span>{{ store.fileView.bytes }} bytes</span>
 				<button class="btn btn-sm btn-ghost spacer" @click="store.navigate(`file://${store.fileView?.path ?? ''}`); store.drawer = 'preview'">Render</button>
 			</div>
-			<pre class="code-block">{{ store.fileView.text.slice(0, 200_000) }}</pre>
+			<div v-if="isMarkdown" class="row">
+				<button class="tab" :class="{ active: mode === 'rendered' }" @click="mode = 'rendered'">Rendered</button>
+				<button class="tab" :class="{ active: mode === 'raw' }" @click="mode = 'raw'">Raw</button>
+			</div>
+			<div v-if="isMarkdown && mode === 'rendered'" class="markdown" v-html="rendered" />
+			<pre v-else class="code-block">{{ store.fileView.text.slice(0, 200_000) }}</pre>
 		</div>
 	</div>
 </template>

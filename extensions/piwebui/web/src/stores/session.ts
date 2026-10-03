@@ -102,6 +102,7 @@ export const useSessionStore = defineStore("session", {
 		shellExcluded: true,
 		pendingSends: [] as Record<string, unknown>[],
 		reconnectAttempts: 0,
+		pendingFile: "" as string,
 		reconnectIn: null as number | null,
 
 		// --- workspaces -------------------------------------------------------
@@ -801,6 +802,7 @@ export const useSessionStore = defineStore("session", {
 		openFileAt(path: string): void {
 			this.fileError = "";
 			this.fileView = null;
+			this.pendingFile = path;
 			void fetch(`/api/file?path=${encodeURIComponent(path)}`)
 				.then((response) => response.json())
 				.then((data: { path?: string; text?: string; language?: string | null; bytes?: number; error?: string }) => {
@@ -809,6 +811,7 @@ export const useSessionStore = defineStore("session", {
 						return;
 					}
 					this.fileView = { path: data.path ?? path, text: data.text ?? "", language: data.language ?? null, bytes: data.bytes ?? 0 };
+					this.pendingFile = "";
 				})
 				.catch((error: unknown) => {
 					this.fileError = String(error);

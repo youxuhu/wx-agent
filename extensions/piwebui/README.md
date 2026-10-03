@@ -101,6 +101,26 @@ cwd 先做 realpath，故 `/tmp` 落到 `--private-tmp--`）。列表包含：�
 6. git 读操作 `GIT_OPTIONAL_LOCKS=0`（不写 index）、`GIT_TERMINAL_PROMPT=0`（不阻塞要凭据）、15s 超时；写操作按仓库**串行**；
 7. 失败/冲突原文回传，不重试、不假装成功；冲突文件以 `UU` 状态如实展示（本轮不提供 ours/theirs 解决）。
 
+## 文件面板：markdown 渲染
+
+`files` 抽屉里点开 `.md / .markdown / .mdx` → 顶部有 **Rendered / Raw** 切换，默认渲染：
+
+- 自研**无依赖**渲染器（`web/src/markdown.ts`，约 150 行）：标题、粗体/斜体/删除线、行内代码、围栏代码块、有序/无序列表（含嵌套）、引用、分隔线、表格、链接。
+- **安全模型**：源码先整段 HTML 转义，输出里只会出现渲染器自己写的标签；链接只允许 `http/https/mailto/相对路径`，`javascript:` / `data:` 一律改写成 `#`；图片降级成 `[image: alt]` 文本（不发起任何外部请求）。所以 `v-html` 在这里是安全的——探针里专门用 `<script>`、`<img onerror>`、`javascript:` URL 三种注入样本验证过。
+- 其余文件仍是纯文本预览（>2MB 与二进制在服务端就被拒绝）。
+
+## 右侧抽屉：可调宽度
+
+抽屉左边缘是分隔条（`role="separator"`）：
+
+- **拖拽**调整宽度（320px ~ 窗口宽-380px）
+- 键盘可达：聚焦后 `←` / `→` 每次 ±24px，`Home` 或双击复位到 460px
+- 宽度存在 `localStorage`（`piwebui.drawerWidth`），刷新后保持
+
+## 深链
+
+`?dir=<绝对路径>` 直接开在指定工作目录；`?file=<绝对路径>` 直接打开 `files` 抽屉并渲染该文件（markdown 会渲染）。例：`http://127.0.0.1:7799/?file=/Users/revy/project/minepi/PLAN.md`
+
 ## 状态栏（把终端页脚搬到浏览器）
 
 底部一行复刻终端页脚的信息，全部来自真实上报：
@@ -211,7 +231,7 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 ## 验收
 
-五个探针，共 **79 项**（都需要服务在对应端口运行）：
+七个探针，共 **99 项**（都需要服务在对应端口运行）：
 
 | probe | 覆盖 | 结果 |
 | --- | --- | --- |
@@ -220,6 +240,8 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 | `workspace-probe.ts`（:7799，需干净注册表） | 注册表增删、realpath 归一、**非 active 写操作被拒**、切换后读操作跟随、按 workspace 列会话、close 清理 | 9/9 |
 | `files-probe.ts`（:7799） | 树列出/`.git` 不展开/ignored 标记/子目录按需、越界 403、`..` 403、软链出界 403、超大与二进制拒绝、目录选择器只列目录 | 13/13 |
 | `git-probe.ts`（:7799，临时仓库） | 状态分类、diff/numstat、stage/commit/log、建分支、脏树切分支拒绝、未知分支拒绝、discard 需确认 + 快照 ref 真实存在、未跟踪不可丢、越界拒绝、冲突 `UU` 识别、无危险 argv | 19/19 |
+| `disconnect-probe.ts`（:7801） | 审批弹窗出现后客户端断线：仍挂起、**不自动放行**、无副作用、重连的客户端仍能收到该弹窗、拒绝后命令确实没跑 | 7/7 |
+| `markdown-probe.ts`（离线） | 标题/粗斜体/行内代码/围栏块/嵌套列表/引用/表格/链接渲染 + `<script>`、`<img onerror>`、`javascript:` 三种注入样本被中和 | 13/13 |
 
 `node probe/preview-probe.ts`（需先按上面用法起服务）会真实起一个 dev server 并核对：无上游时拒绝、就绪判定、HTML/CSS 改写与脚本注入、CSP 放宽事实、JS 透传、`/__file/` 只读与越界拒绝、`stop` 后进程组确实消失。当前 **17/17 通过**。
 

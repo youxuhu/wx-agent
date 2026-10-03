@@ -21,6 +21,52 @@ import { useSessionStore } from "./stores/session.ts";
 const store = useSessionStore();
 const sidebarOpen = ref(true);
 
+/**
+ * Right drawer width: dragged by the handle on its left edge and remembered per browser.
+ * Clamped so the thread keeps a usable width.
+ */
+const DRAWER_KEY = "piwebui.drawerWidth";
+const drawerWidth = ref(Number(localStorage.getItem(DRAWER_KEY) ?? 0) || 460);
+
+function applyDrawerWidth(): void {
+	document.documentElement.style.setProperty("--drawer-w", `${drawerWidth.value}px`);
+}
+
+function startResize(event: PointerEvent): void {
+	event.preventDefault();
+	const move = (moveEvent: PointerEvent): void => {
+		const next = window.innerWidth - moveEvent.clientX;
+		drawerWidth.value = Math.max(320, Math.min(next, Math.max(360, window.innerWidth - 380)));
+		applyDrawerWidth();
+	};
+	const stop = (): void => {
+		window.removeEventListener("pointermove", move);
+		window.removeEventListener("pointerup", stop);
+		localStorage.setItem(DRAWER_KEY, String(Math.round(drawerWidth.value)));
+	};
+	window.addEventListener("pointermove", move);
+	window.addEventListener("pointerup", stop);
+}
+
+function resetDrawerWidth(): void {
+	setDrawerWidth(460);
+}
+
+function setDrawerWidth(value: number): void {
+	drawerWidth.value = Math.max(320, Math.min(value, Math.max(360, window.innerWidth - 380)));
+	applyDrawerWidth();
+	localStorage.setItem(DRAWER_KEY, String(Math.round(drawerWidth.value)));
+}
+
+/** The handle is a real separator: draggable, and adjustable with the arrow keys. */
+function onResizeKey(event: KeyboardEvent): void {
+	if (event.key === "ArrowLeft") setDrawerWidth(drawerWidth.value + 24);
+	else if (event.key === "ArrowRight") setDrawerWidth(drawerWidth.value - 24);
+	else if (event.key === "Home") resetDrawerWidth();
+	else return;
+	event.preventDefault();
+}
+
 const TABS = [
 	{ key: "files", label: "Files" },
 	{ key: "changes", label: "Changes" },
@@ -41,10 +87,24 @@ function toggleDrawer(key: string): void {
 	if (store.drawer === "changes" || store.drawer === "branches") store.refreshGit();
 }
 
+/** Deep links: `?dir=` opens a workspace, `?file=` shows one file in the files drawer. */
+function applyDeepLink(): void {
+	const params = new URLSearchParams(location.search);
+	const dir = params.get("dir");
+	if (dir) store.openFolder(dir);
+	const file = params.get("file");
+	if (file) {
+		store.drawer = "files";
+		store.openFileAt(file);
+	}
+}
+
 onMounted(() => {
+	applyDrawerWidth();
 	store.connect();
 	store.listenForPicks();
 	store.loadWorkspacesOnce();
+	applyDeepLink();
 });
 </script>
 
@@ -124,6 +184,16 @@ onMounted(() => {
 			</main>
 
 			<aside v-if="store.drawer !== 'none'" class="drawer">
+				<div
+					class="resizer"
+					role="separator"
+					aria-orientation="vertical"
+					tabindex="0"
+					title="Drag or use ← / → to resize · double-click or Home to reset"
+					@pointerdown="startResize"
+					@dblclick="resetDrawerWidth"
+					@keydown="onResizeKey"
+				/>
 				<div class="drawer-head">
 					<strong class="small">{{ store.drawer }}</strong>
 					<span class="spacer" />
