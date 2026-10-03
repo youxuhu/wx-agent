@@ -1,105 +1,82 @@
 <script setup lang="ts">
 /**
- * Approval dialog — renders pi extension UI requests (select / confirm / input).
- *
- * Invariant: nothing here defaults to "allow". Closing the dialog (Esc / mask) sends a
- * cancellation, which pi reports to the extension as undefined/false — i.e. not approved.
+ * Approval dialogs from pi's extension UI protocol. Answering is always explicit: closing the
+ * dialog counts as "not approved", and nothing is auto-allowed (PLAN.md §5).
  */
-import { computed, ref, watch } from "vue";
-import { Button, Dialog, Space, Tag, Textarea } from "@pixelium/web-vue";
+import { computed, ref } from "vue";
 import type { UiRequest } from "../types.ts";
 
 const props = defineProps<{ requests: UiRequest[] }>();
-const emit = defineEmits<{ (event: "select", payload: { id: string; value?: string }): void; (event: "confirm", payload: { id: string; confirmed: boolean }): void }>();
+const emit = defineEmits<{
+	(event: "select", payload: { id: string; value?: string }): void;
+	(event: "confirm", payload: { id: string; confirmed: boolean }): void;
+	(event: "input", payload: { id: string; value?: string }): void;
+}>();
 
-const request = computed(() => props.requests[0]);
-const draft = ref("");
-
-watch(
-	() => request.value?.id,
-	() => {
-		draft.value = "";
-	},
-);
-
-const deadline = computed(() => {
-	const timeout = request.value?.timeout;
-	if (typeof timeout !== "number") return "";
-	return `expires in ${(timeout / 1000).toFixed(0)}s at most (then it is reported as cancelled, never allowed)`;
+const inputDraft = ref("");
+const current = computed(() => props.requests[0]);
+const options = computed(() => (current.value?.options ?? []) as Array<string | { label?: string; value?: string; description?: string }>);
+const target = computed(() => {
+	const request = current.value;
+	if (!request) return "";
+	const args = (request as { payload?: Record<string, unknown> }).payload ?? {};
+	return String(args.command ?? args.path ?? args.tool ?? "");
 });
+const rule = computed(() => String((current.value as { rule?: string })?.rule ?? ""));
 
-function close(): void {
-	const current = request.value;
-	if (!current) return;
-	if (current.method === "confirm") emit("confirm", { id: current.id, confirmed: false });
-	else emit("select", { id: current.id, value: undefined });
+function choose(option: string | { label?: string; value?: string }): void {
+	const request = current.value;
+	if (!request) return;
+	const value = typeof option === "string" ? option : (option.value ?? option.label ?? "");
+	emit("select", { id: request.id, value });
+}
+
+function label(option: string | { label?: string; value?: string }): string {
+	return typeof option === "string" ? option : (option.label ?? option.value ?? "");
+}
+
+function dismiss(): void {
+	const request = current.value;
+	if (!request) return;
+	emit("select", { id: request.id, value: undefined });
 }
 </script>
 
 <template>
-	<Dialog
-		v-if="request"
-		:visible="true"
-		:title="request.title || 'approval required'"
-		:mask-closable="false"
-		:show-footer="false"
-		class="ui-dialog"
-	>
-		<div class="ui-body">
-			<Space>
-				<Tag theme="warning">pi asks</Tag>
-				<Tag theme="notice">{{ request.method }}</Tag>
-				<span v-if="deadline" class="dim">{{ deadline }}</span>
-			</Space>
+	<div v-if="current" class="overlay">
+		<div class="modal">
+			<h3>{{ current.title || (current.method === "confirm" ? "Confirm" : "Approval required") }}</h3>
+			<p v-if="target" class="fact mono">target: {{ target }}</p>
+			<p v-if="rule" class="fact">rule: {{ rule }}</p>
+			<p v-if="current.message" class="fact">{{ current.message }}</p>
+			<p class="tiny faint">
+				timeout: {{ current.timeout ? `${current.timeout} ms` : "none — waits until answered" }}
+				<template v-if="props.requests.length > 1"> · {{ props.requests.length - 1 }} more waiting</template>
+			</p>
 
-			<p v-if="request.message" class="ui-message">{{ request.message }}</p>
+			<div v-if="current.method === 'confirm'" class="row">
+				<button class="btn btn-primary" @click="emit('confirm', { id: current.id, confirmed: true })">Confirm</button>
+				<button class="btn" @click="emit('confirm', { id: current.id, confirmed: false })">Cancel</button>
+			</div>
 
-			<template v-if="request.method === 'select'">
-				<Space direction="vertical" class="ui-options">
-					<Button v-for="option in request.options || []" :key="option" variant="outline" block @click="emit('select', { id: request.id, value: option })">
-						{{ option }}
-					</Button>
-				</Space>
-			</template>
+			<div v-else-if="current.method === 'input' || current.method === 'editor'" class="col">
+				<textarea v-model="inputDraft" class="textarea" :rows="current.method === 'editor' ? 8 : 3" :placeholder="current.placeholder ?? ''" />
+				<div class="row">
+					<button class="btn btn-primary" @click="emit('input', { id: current.id, value: inputDraft })">Submit</button>
+					<button class="btn" @click="emit('input', { id: current.id, value: undefined })">Cancel</button>
+				</div>
+			</div>
 
-			<template v-else-if="request.method === 'confirm'">
-				<Space>
-					<Button @click="emit('confirm', { id: request.id, confirmed: true })">yes</Button>
-					<Button variant="outline" theme="danger" @click="emit('confirm', { id: request.id, confirmed: false })">no</Button>
-				</Space>
-			</template>
+			<div v-else class="col">
+				<button v-for="option in options" :key="label(option)" class="btn" style="justify-content: flex-start" @click="choose(option)">
+					{{ label(option) }}
+				</button>
+				<input v-if="!options.length" v-model="inputDraft" class="field" placeholder="value…" @keydown.enter="emit('select', { id: current.id, value: inputDraft })" />
+			</div>
 
-			<template v-else>
-				<Textarea v-model="draft" :rows="3" :placeholder="request.placeholder || ''" />
-				<Space>
-					<Button @click="emit('select', { id: request.id, value: draft })">submit</Button>
-				</Space>
-			</template>
-
-			<Space>
-				<Button variant="text" theme="danger" @click="close">dismiss (counts as not approved)</Button>
-			</Space>
+			<div class="row">
+				<button class="btn btn-ghost" @click="dismiss()">Dismiss (counts as not approved)</button>
+			</div>
 		</div>
-	</Dialog>
+	</div>
 </template>
-
-<style scoped>
-.ui-body {
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-	max-width: 640px;
-}
-
-.ui-message {
-	white-space: pre-wrap;
-	word-break: break-word;
-	margin: 0;
-	max-height: 40vh;
-	overflow: auto;
-}
-
-.ui-options {
-	width: 100%;
-}
-</style>

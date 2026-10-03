@@ -1,16 +1,9 @@
 <script setup lang="ts">
 /**
- * Status bar: the same numbers the terminal footer shows, assembled from what pi reported.
- *
- * Sources (all facts, nothing invented):
- *  - `usage` on `message_update` / `turn_end` → ↑in ↓out R(cache read) W(cache write) $cost
- *  - `get_session_stats.contextUsage` → percent / context window
- *  - `setStatus` extension records → policy mode, git branch, LSP state, sandbox state…
- *  - output tokens per second is measured here from consecutive usage reports of a run
- *    (same definition as the terminal speed footer: output tokens ÷ elapsed seconds).
+ * Footer facts, same numbers as the terminal footer: session tokens/cost, cache hit rate,
+ * context usage, extension statuses, model and thinking level.
  */
 import { computed } from "vue";
-import { Tag, Tooltip } from "@pixelium/web-vue";
 import { useSessionStore } from "../stores/session.ts";
 
 const store = useSessionStore();
@@ -20,21 +13,10 @@ const fmtTokens = (n: number): string => {
 	return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
 };
 
-/**
- * Session totals come from `get_session_stats` (what the terminal footer shows); the live
- * per-message usage is the fallback until the first stats response arrives.
- */
 const totals = computed(() => {
 	const tokens = store.stats?.tokens;
 	if (tokens && (tokens.input || tokens.output || tokens.cacheRead || tokens.cacheWrite)) {
-		return {
-			input: tokens.input ?? 0,
-			output: tokens.output ?? 0,
-			cacheRead: tokens.cacheRead ?? 0,
-			cacheWrite: tokens.cacheWrite ?? 0,
-			cost: Number(store.stats?.cost ?? 0),
-			source: "session",
-		};
+		return { input: tokens.input ?? 0, output: tokens.output ?? 0, cacheRead: tokens.cacheRead ?? 0, cacheWrite: tokens.cacheWrite ?? 0, cost: Number(store.stats?.cost ?? 0), source: "session" };
 	}
 	if (!store.usage) return null;
 	return { ...store.usage, source: "live" };
@@ -45,104 +27,38 @@ const cacheHitRate = computed(() => {
 	if (!value) return null;
 	const prompt = value.input + value.cacheRead + value.cacheWrite;
 	if (value.cacheRead <= 0 && value.cacheWrite <= 0) return null;
-	if (prompt <= 0) return null;
-	return (value.cacheRead / prompt) * 100;
+	return prompt > 0 ? (value.cacheRead / prompt) * 100 : null;
 });
 
-const contextPercent = computed(() => store.contextUsage?.percent ?? null);
-const contextTheme = computed(() => {
-	const percent = contextPercent.value;
-	if (percent === null) return "notice";
-	if (percent > 90) return "danger";
-	if (percent > 70) return "warning";
-	return "success";
+const percent = computed(() => store.contextUsage?.percent ?? null);
+const contextLabel = computed(() => {
+	if (percent.value === null) return "context —";
+	const window = store.contextUsage?.contextWindow ?? 0;
+	return `context ${percent.value.toFixed(1)}%/${window ? fmtTokens(window) : "?"}`;
 });
-
-/** Extension statuses, keys kept so a value is always traceable to its setter. */
 const statuses = computed(() => Object.entries(store.status).filter(([, value]) => value && value.trim().length > 0));
+
+function fmtClock(ms: number | null): string {
+	if (!ms) return "—";
+	return new Date(ms).toLocaleTimeString();
+}
 </script>
 
 <template>
-	<div class="bar">
-		<Tooltip :content="totals ? `token totals (${totals.source})` : 'no usage reported yet'">
-			<span class="seg mono">
-				<template v-if="totals">
-					<span v-if="totals.input">↑{{ fmtTokens(totals.input) }}</span>
-					<span v-if="totals.output">↓{{ fmtTokens(totals.output) }}</span>
-					<span v-if="totals.cacheRead">R{{ fmtTokens(totals.cacheRead) }}</span>
-					<span v-if="totals.cacheWrite">W{{ fmtTokens(totals.cacheWrite) }}</span>
-					<span v-if="cacheHitRate !== null">CH{{ cacheHitRate.toFixed(1) }}%</span>
-					<span v-if="totals.cost">${{ totals.cost.toFixed(3) }}</span>
-				</template>
-				<span v-else class="dim">no usage yet</span>
-			</span>
-		</Tooltip>
-
-		<span v-if="store.speed !== null" class="seg mono">{{ Math.round(store.speed) }} t/s</span>
-
-		<Tooltip content="context usage / window, as estimated by pi (get_session_stats.contextUsage)">
-			<Tag size="small" :theme="contextTheme">
-				<template v-if="contextPercent !== null">
-					{{ contextPercent.toFixed(1) }}%/{{ store.contextUsage?.contextWindow ? fmtTokens(store.contextUsage.contextWindow) : "?" }}
-				</template>
-				<template v-else>context: ?</template>
-			</Tag>
-		</Tooltip>
-		<span class="seg statuses">
-			<Tooltip v-for="[key, value] in statuses" :key="key" :content="`setStatus(${key})`">
-				<span class="status mono">{{ value }}</span>
-			</Tooltip>
+	<div class="statusline">
+		<span v-if="totals" class="mono tiny">
+			<template v-if="totals.input">↑{{ fmtTokens(totals.input) }}</template>
+			<template v-if="totals.output"> ↓{{ fmtTokens(totals.output) }}</template>
+			<template v-if="totals.cacheRead"> R{{ fmtTokens(totals.cacheRead) }}</template>
+			<template v-if="cacheHitRate !== null"> CH{{ cacheHitRate.toFixed(1) }}%</template>
+			<template v-if="totals.cost"> ${{ totals.cost.toFixed(3) }}</template>
 		</span>
-
-		<span class="seg right mono">
-			<span>{{ store.model || "no-model" }}</span>
-			<span v-if="store.thinkingLevel">• {{ store.thinkingLevel }}</span>
-			<span v-if="store.queueSteering || store.queueFollowUp" class="dim">
-				queue {{ store.queueSteering }}/{{ store.queueFollowUp }}
-			</span>
-		</span>
+		<span v-else class="tiny faint">no usage yet</span>
+		<span v-if="store.speed !== null" class="tiny mono">{{ Math.round(store.speed) }} t/s</span>
+		<span class="tiny mono" :class="percent !== null && percent > 80 ? 'err' : ''">{{ contextLabel }}</span>
+		<span v-for="[key, value] in statuses" :key="key" class="chip" :title="`setStatus(${key})`">{{ value }}</span>
+		<span class="spacer" />
+		<span class="tiny faint">{{ store.model || "no model" }}<template v-if="store.thinkingLevel"> · {{ store.thinkingLevel }}</template></span>
+		<span class="tiny faint">conn {{ store.conn }}<template v-if="store.reconnectIn"> · retry in {{ store.reconnectIn }}s</template></span>
 	</div>
 </template>
-
-<style scoped>
-.bar {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-	border-top: 1px solid var(--px-neutral-5, #ddd);
-	padding: 2px 0;
-	font-size: 12px;
-}
-
-.seg {
-	display: inline-flex;
-	gap: 8px;
-	align-items: center;
-}
-
-.mono {
-	font-family: var(--px-font, monospace);
-}
-
-.statuses {
-	flex: 1;
-	min-width: 0;
-	flex-wrap: wrap;
-}
-
-.status {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	max-width: 32vw;
-}
-
-.right {
-	margin-left: auto;
-}
-
-.dim {
-	color: var(--px-neutral-8, #666);
-}
-</style>

@@ -81,6 +81,7 @@ export const useSessionStore = defineStore("session", {
 		composerSeq: 0,
 		previewFrameKey: 0,
 		// control surface
+		drawer: "none" as "none" | "files" | "changes" | "history" | "branches" | "preview" | "settings",
 		showControl: false,
 		controlTab: "commands" as string,
 		commands: [] as CommandInfo[],
@@ -114,7 +115,7 @@ export const useSessionStore = defineStore("session", {
 		browseRoots: [] as Array<{ path: string; label: string }>,
 		browseError: "" as string,
 
-		// --- left sidebar -----------------------------------------------------
+		// --- drawer/sidebar view state -----------------------------------------
 		sidebar: "files" as "files" | "changes" | "history" | "branches" | "none",
 		treeChildren: {} as Record<string, DirEntry[]>,
 		treeExpanded: [] as string[],
@@ -692,6 +693,17 @@ export const useSessionStore = defineStore("session", {
 		},
 
 		// ---- workspaces ------------------------------------------------------
+		loadWorkspacesOnce(): void {
+			void fetch("/api/workspaces")
+				.then((response) => response.json())
+				.then((data: { active?: string | null; recent?: string[]; workspaces?: WorkspaceInfo[] }) => {
+					this.workspaces = data.workspaces ?? [];
+					this.activeWorkspace = data.active ?? null;
+					this.recentWorkspaces = data.recent ?? [];
+					if (this.activeWorkspace) this.cwd = this.activeWorkspace;
+				})
+				.catch(() => undefined);
+		},
 		refreshWorkspaces(): void {
 			this.send({ type: "list_workspaces" });
 		},
@@ -744,7 +756,9 @@ export const useSessionStore = defineStore("session", {
 		},
 
 		// ---- left sidebar: files ---------------------------------------------
+		/** Kept for compatibility with the panel code; the drawer is the single entry point. */
 		openSidebar(tab: "files" | "changes" | "history" | "branches"): void {
+			this.drawer = this.drawer === tab ? "none" : tab;
 			this.sidebar = this.sidebar === tab ? "none" : tab;
 			if (this.sidebar === "files") this.ensureTree(this.cwd);
 			if (this.sidebar === "changes") this.refreshGit();
@@ -999,6 +1013,7 @@ export const useSessionStore = defineStore("session", {
 
 		// ---- control surface -------------------------------------------------
 		openControl(tab?: string): void {
+			this.drawer = "settings";
 			this.showControl = true;
 			if (tab) this.controlTab = tab;
 		},

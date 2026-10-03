@@ -1,86 +1,52 @@
 <script setup lang="ts">
-/** Branch list and switching. A dirty tree is refused by the service, not worked around here. */
 import { computed, onMounted, ref } from "vue";
-import { Button, Input, Space, Tag } from "@pixelium/web-vue";
 import { useSessionStore } from "../stores/session.ts";
 
 const store = useSessionStore();
 const draft = ref("");
-
 const local = computed(() => store.gitBranches.filter((branch) => !branch.remote));
 const remote = computed(() => store.gitBranches.filter((branch) => branch.remote));
+
+function create(): void {
+	const name = draft.value.trim();
+	if (!name) return;
+	store.createGitBranch(name);
+	draft.value = "";
+}
 
 onMounted(() => store.refreshGit());
 </script>
 
 <template>
-	<div class="panel">
-		<Space>
-			<Button size="small" variant="outline" @click="store.refreshGit()">refresh</Button>
-			<Tag size="small">⎇ {{ store.gitStatus?.branch ?? "?" }}</Tag>
-		</Space>
+	<div class="pane">
 		<div class="row">
-			<Input v-model="draft" size="small" placeholder="new branch name…" @keydown.enter="draft.trim() && (store.createGitBranch(draft.trim()), (draft = ''))" />
-			<Button size="small" variant="outline" :disabled="!draft.trim()" @click="store.createGitBranch(draft.trim()); draft = ''">create + checkout</Button>
+			<button class="btn btn-sm" @click="store.refreshGit()">Refresh</button>
+			<span class="chip">⎇ {{ store.gitStatus?.branch ?? "?" }}</span>
+		</div>
+		<div class="row-nowrap">
+			<input v-model="draft" class="field" placeholder="new branch name…" @keydown.enter="create()" />
+			<button class="btn btn-sm" :disabled="!draft.trim()" @click="create()">Create</button>
 		</div>
 
-		<h4>local ({{ local.length }})</h4>
-		<div v-for="branch in local" :key="branch.name" class="row branch">
-			<Tag size="small" :theme="branch.name === store.gitStatus?.branch ? 'success' : 'notice'">
-				{{ branch.name === store.gitStatus?.branch ? "current" : "switch" }}
-			</Tag>
-			<span class="name">{{ branch.name }}</span>
-			<span class="dim">{{ branch.sha }}</span>
-			<span v-if="branch.upstream" class="dim">→ {{ branch.upstream }}</span>
-			<Button v-if="branch.name !== store.gitStatus?.branch" size="small" variant="text" @click="store.checkoutBranch(branch.name)">checkout</Button>
+		<h4>Local · {{ local.length }}</h4>
+		<div class="list">
+			<div v-for="branch in local" :key="branch.name" class="list-row">
+				<span class="chip" :class="branch.name === store.gitStatus?.branch ? 'chip-ok' : ''">{{ branch.name === store.gitStatus?.branch ? "current" : "local" }}</span>
+				<span class="mono ellipsis">{{ branch.name }}</span>
+				<span class="tiny faint">{{ branch.sha }}</span>
+				<span class="spacer" />
+				<button v-if="branch.name !== store.gitStatus?.branch" class="btn btn-sm btn-ghost" @click="store.checkoutBranch(branch.name)">Checkout</button>
+			</div>
 		</div>
 
-		<h4>remote ({{ remote.length }})</h4>
-		<div v-for="branch in remote" :key="branch.name" class="row branch">
-			<span class="name">{{ branch.name }}</span>
-			<span class="dim">{{ branch.sha }}</span>
+		<h4>Remote · {{ remote.length }}</h4>
+		<div class="list">
+			<div v-for="branch in remote" :key="branch.name" class="list-row">
+				<span class="mono ellipsis">{{ branch.name }}</span>
+				<span class="tiny faint">{{ branch.sha }}</span>
+			</div>
 		</div>
 
 		<p v-if="store.gitNotice" class="fact">{{ store.gitNotice }}</p>
 	</div>
 </template>
-
-<style scoped>
-.panel {
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
-	min-height: 0;
-	overflow: auto;
-}
-
-.row {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	flex-wrap: wrap;
-}
-
-.branch {
-	border-bottom: 1px solid var(--px-neutral-3, #eee);
-}
-
-h4 {
-	margin: 6px 0 2px;
-	font-size: 13px;
-}
-
-.name {
-	font-family: var(--px-font, monospace);
-}
-
-.dim {
-	color: var(--px-neutral-8, #666);
-	font-size: 12px;
-}
-
-.fact {
-	margin: 0;
-	font-size: 12px;
-}
-</style>

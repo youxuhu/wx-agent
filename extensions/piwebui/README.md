@@ -1,4 +1,4 @@
-# piwebui — 像素风本地 Web UI（Vue 3 + TS + Pinia + Pixelium）
+# piwebui — 本地 Web UI（Vue 3 + TS + Pinia，Codex 风格自绘 CSS）
 
 在浏览器里跑一个 pi 会话：流式对话、工具卡片、扩展审批弹窗（policy 的四选一），
 后续加浏览器预览面板（iframe + 元素拾取）。
@@ -6,7 +6,7 @@
 ## 架构
 
 ```
-浏览器 (Vue 3 + Pinia + @pixelium/web-vue)
+浏览器 (Vue 3 + Pinia + 自绘 CSS，无组件库)
    │ WebSocket /ws
    ▼
 Node 服务 server/main.ts (仅绑 127.0.0.1，默认 7799)
@@ -22,7 +22,7 @@ pi --mode rpc (受管子进程)
 ## 用法
 
 ```bash
-npm install                        # 依赖（含 @pixelium/web-vue）
+npm install                        # 运行依赖只有 vue / pinia / ws
 npm run build                      # 前端 → dist/
 node server/main.ts --port 7799 --cwd /path/to/project \
   --model deepseek/deepseek-flash --thinking low
@@ -35,15 +35,23 @@ node server/main.ts --port 7799 --cwd /path/to/project \
 node probe/ws-probe.ts "reply with exactly: pong" --seconds 90
 ```
 
-## 可读性（字号）
+## 界面（对齐 Codex Web，自绘 CSS）
 
-Pixelium 的组件字号是**写死的 px**（12/14/15px），`setPixelSize` 只重算组件盒子尺寸、不改字号，所以在 `web/src/styles/app.css` 里对整页做了一次缩放：
+**组件库已弃用**：`@pixelium/web-vue` 从依赖里移除，改用一份设计令牌 + 原生控件（`web/src/styles/app.css`）。产物从 CSS 260KB/JS 266KB 降到 **CSS 7.6KB / JS 137KB**。
 
-```css
-html { zoom: 1.3; }   /* 想更大/更小就改这一个数 */
+布局（Codex Web 的信息层级）：
+
+```
+┌ 顶栏：☰ · 工作目录 · 连接/pi 状态 · 审批数 … Files Changes History Branches Preview Settings
+├ 左侧栏（可折叠）：New session · Open folder… · Sessions 列表（标题 + 时间 + 条数）
+└ 中线：对话流（用户块 / 助手文本 / 折叠的 thinking / 工具卡）
+   └ 底部：圆角输入框 + Send/Stop；其下一行 steer 开关 + 页脚事实（tokens/cost/context/扩展状态/模型）
+右侧抽屉（默认收起）：files · changes · history · branches · preview · settings
 ```
 
-整页统一缩放（文字、边框、抽屉、对话框一起变），代价是布局视口变窄（1280 物理像素 ≈ 984 CSS px）；代码块与长段落也加了 `pre-wrap` + `overflow-wrap: anywhere`，不会因为放大而被裁切。**注意**：加了 `zoom` 之后，系统的无障碍坐标空间是缩放前的，自动化点击要用元素索引而不是绝对像素。
+- **只用原生控件**：前面 `pick element` 与 `ignored` 两个开关点不动，根因是它们被组件库的 `Tooltip` 包了一层（点击被包裹层吃掉/不可交互）；现在全是 `<input type="checkbox">`、`<select>`、`<button>`，无障碍树里可直接命中。
+- 视觉：1px 浅灰描边、白底、无像素字体、无 emoji、系统字体栈，等宽字体只用于路径/命令/diff；正文 15px，次要 13px，辅助 12px。
+- 只浅色：`html.className = "light"` + `color-scheme: light`，没有深色分支。
 
 ## 会话列表与切换
 
@@ -196,10 +204,10 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 ## 主题
 
-**只使用浅色（白底）**：`web/index.html` 与启动脚本都把 `<html>` 固定为 `light`，
-并声明 `<meta name="color-scheme" content="light">`。Pixelium 的 `:root.light`
-选择器比它的 `prefers-color-scheme: dark` 媒体查询优先级更高，因此在系统深色模式下
-界面同样是白底（已在本机 Dark 模式下实测）。深色开关已从界面移除。
+**只使用浅色（白底）**：`web/index.html` 声明 `<meta name="color-scheme" content="light">`，
+`main.ts` 固定 `<html class="light">` 并设 `colorScheme = "light"`，样式表里**没有任何
+`prefers-color-scheme` 分支**——所以系统深色模式下界面依然是白底（本机 Dark 模式下实测）。
+界面上没有深色开关。
 
 ## 验收
 
@@ -220,13 +228,12 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 - 代理只转发 HTTP：**dev server 的 WebSocket / HMR 通道没有转发**（页面能用，热更新不生效）；需要热更新请直接用浏览器打开 dev server。
 - 同一时刻只允许一个 dev server（我们只管理自己起的那一个）。
 - 文件面板只读；git 面板不做 push / PR / 交互式 rebase；冲突只展示不解决。
-- "单写者"（多标签页同时驱动同一个 RPC 子进程）尚未按标签页隔离，当前所有标签页都能发命令。
-
-- 前端依赖 `@pixelium/web-vue@0.2.1-delta`（预发布版本号）。
-- 浏览器会话与 TUI 当前会话**相互独立**（pi 无"同一会话两处驱动"机制）。
+- 代理只转发 HTTP（无 HMR）；同一时刻只允许一个 dev server。
+- 同一 workspace 的**多标签页**都能发命令（"单写者"目前是 workspace 级，而不是标签页级）。
+- 浏览器里的会话与终端 TUI 的会话**相互独立**（pi 没有"同一会话两处驱动"的机制）。
 - 预览面板（P3）与元素拾取尚未实现；审批面板已实现但待端到端验收。
 
 ## 许可与署名
 
-Pixelium Design（MIT）随包分发；其内置字体 Fusion Pixel（SIL OFL 1.1）、
+（历史）此前随组件库分发的字体 Fusion Pixel（SIL OFL 1.1）、
 图标 Pixel Icon Library（CC BY 4.0）、pixelarticons（MIT）需保留署名。

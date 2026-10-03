@@ -1,42 +1,41 @@
 <script setup lang="ts">
-/** One tool execution: facts only (name, args, status, output), long output collapsed. */
+/** One tool call: name, status, duration, argument summary; output collapses. */
 import { computed, ref } from "vue";
-import { Button, Collapse, CollapseItem, Space, Tag } from "@pixelium/web-vue";
 import type { ToolRun } from "../types.ts";
 
-const props = defineProps<{ run: ToolRun }>();
-const expanded = ref(false);
+const props = defineProps<{ run?: ToolRun; fallbackName?: string }>();
+const open = ref(false);
 
-const statusTheme = computed(() => (props.run.status === "error" ? "danger" : props.run.status === "running" ? "warning" : "success"));
-const summary = computed(() => {
-	const args = props.run.args as Record<string, unknown> | undefined;
-	if (!args) return "";
-	const first = ["command", "path", "file_path", "pattern", "action", "query"].map((key) => args[key]).find((value) => typeof value === "string");
-	return typeof first === "string" ? first.replace(/\s+/g, " ").slice(0, 120) : "";
-});
-const body = computed(() => props.run.output || props.run.partial || "(no output yet)");
+const name = computed(() => props.run?.name ?? props.fallbackName ?? "tool");
+const status = computed(() => props.run?.status ?? "running");
 const duration = computed(() => {
-	if (!props.run.endedAt) return "";
-	return `${((props.run.endedAt - props.run.startedAt) / 1000).toFixed(1)}s`;
+	const run = props.run;
+	if (!run?.endedAt || !run.startedAt) return "";
+	return `${((run.endedAt - run.startedAt) / 1000).toFixed(1)}s`;
 });
+const summary = computed(() => {
+	const args = props.run?.args as Record<string, unknown> | undefined;
+	if (!args) return "";
+	const first = Object.entries(args).find(([, value]) => typeof value === "string" && value.length > 0);
+	if (!first) return "";
+	const text = String(first[1]).replace(/\s+/g, " ");
+	return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+});
+const output = computed(() => props.run?.output ?? "");
 </script>
 
 <template>
 	<div class="tool">
-		<div class="tool-head">
-			<Tag theme="notice">{{ props.run.toolName }}</Tag>
-			<Tag :theme="statusTheme">{{ props.run.status }}</Tag>
-			<span v-if="duration" class="dim">{{ duration }}</span>
-			<span class="dim ellipsis">{{ summary }}</span>
-			<Space>
-				<Button size="small" variant="text" @click="expanded = !expanded">{{ expanded ? "hide" : "details" }}</Button>
-			</Space>
+		<div class="tool-head" @click="open = !open">
+			<span class="caret faint">{{ open ? "▾" : "▸" }}</span>
+			<span class="name">{{ name }}</span>
+			<span class="chip" :class="status === 'error' ? 'chip-danger' : status === 'done' ? '' : 'chip-warn'">{{ status }}</span>
+			<span v-if="duration" class="faint tiny">{{ duration }}</span>
+			<span class="dim small ellipsis spacer">{{ summary }}</span>
 		</div>
-		<Collapse v-if="expanded">
-			<CollapseItem title="args"><pre class="pre">{{ JSON.stringify(props.run.args, null, 2) }}</pre></CollapseItem>
-			<CollapseItem title="output">
-				<pre class="pre">{{ body.length > 4000 ? body.slice(0, 4000) + `\n… truncated (${body.length} chars total)` : body }}</pre>
-			</CollapseItem>
-		</Collapse>
+		<div v-if="open" class="tool-body">
+			<pre v-if="output" class="code-block">{{ output.slice(-20000) }}</pre>
+			<pre v-else class="dim">(no output reported)</pre>
+		</div>
 	</div>
 </template>

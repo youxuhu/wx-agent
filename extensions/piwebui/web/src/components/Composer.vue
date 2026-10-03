@@ -1,92 +1,85 @@
 <script setup lang="ts">
 /**
- * Composer: send a prompt, steer a running run, or abort it.
- *
- * steer = delivered after the current assistant turn finishes its tool calls and
- * before the next LLM call (mid-run redirection). It only means something while a
- * run is active, so the toggle is disabled when idle rather than queueing a message
- * that nobody is waiting for.
+ * Composer: prompt, steer or abort. Steer is only meaningful during a run, so the control is
+ * disabled while idle instead of queueing a message nobody consumes.
  */
-import { computed, ref, watch } from "vue";
-import { Button, Space, Switch, Textarea, Tooltip } from "@pixelium/web-vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 
-const props = defineProps<{ running: boolean; queueSteering: number; queueFollowUp: number; draft: string; draftSeq: number }>();
+const props = defineProps<{
+	running: boolean;
+	queueSteering: number;
+	queueFollowUp: number;
+	draft: string;
+	draftSeq: number;
+	busyHint?: string;
+}>();
 const emit = defineEmits<{ (event: "prompt", text: string): void; (event: "steer", text: string): void; (event: "abort"): void }>();
 
 const text = ref("");
 const steerMode = ref(false);
+const area = ref<HTMLTextAreaElement | null>(null);
 const effectiveSteer = computed(() => steerMode.value && props.running);
-
-// The preview panel drops picked-element facts here; it never sends them on its own.
-watch(
-	() => props.draftSeq,
-	() => {
-		if (!props.draft) return;
-		text.value = text.value.trim() ? `${text.value.trim()}\n\n${props.draft}` : props.draft;
-	},
-);
 
 function submit(): void {
 	const value = text.value.trim();
 	if (!value) return;
 	emit(effectiveSteer.value ? "steer" : "prompt", value);
 	text.value = "";
+	grow();
+}
+
+function grow(): void {
+	const element = area.value;
+	if (!element) return;
+	element.style.height = "auto";
+	element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
 }
 
 function onKeydown(event: KeyboardEvent): void {
-	if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+	if (event.key === "Enter" && !event.shiftKey) {
 		event.preventDefault();
 		submit();
 	}
 }
+
+watch(
+	() => props.draftSeq,
+	async () => {
+		if (!props.draft) return;
+		text.value = text.value.trim() ? `${text.value.trim()}\n\n${props.draft}` : props.draft;
+		await nextTick();
+		grow();
+		area.value?.focus();
+	},
+);
+
+onMounted(grow);
 </script>
 
 <template>
 	<div class="composer">
-		<Textarea v-model="text" :rows="3" placeholder="prompt…  (⌘/Ctrl+Enter to send)" @keydown="onKeydown" />
-		<div class="composer-row">
-			<Space>
-				<Button :disabled="!text.trim()" @click="submit">{{ effectiveSteer ? "steer" : "send" }}</Button>
-				<Button v-if="props.running" variant="outline" theme="danger" @click="emit('abort')">abort</Button>
-				<Tooltip content="steer: delivered after the current turn's tool calls, before the next LLM call (only while a run is active)">
-					<span class="steer-toggle">
-						<Switch v-model="steerMode" :disabled="!props.running" size="small" />
-						<span class="dim">steer</span>
-					</span>
-				</Tooltip>
-			</Space>
-			<span class="dim queue">
-				<span v-if="props.queueSteering">steering: {{ props.queueSteering }}</span>
-				<span v-if="props.queueFollowUp">follow-up: {{ props.queueFollowUp }}</span>
-				<span v-if="!props.running && !props.queueSteering && !props.queueFollowUp">idle</span>
-			</span>
+		<div class="composer-inner">
+			<div class="composer-box">
+				<textarea
+					ref="area"
+					v-model="text"
+					rows="1"
+					placeholder="Ask pi to do something…  (Enter to send, Shift+Enter for newline)"
+					@input="grow"
+					@keydown="onKeydown"
+				/>
+				<button v-if="props.running" class="btn btn-sm btn-danger" @click="emit('abort')">Stop</button>
+				<button v-else class="btn btn-sm btn-primary" :disabled="!text.trim()" @click="submit()">Send</button>
+			</div>
+			<div class="statusline">
+				<label class="row tiny" :class="{ faint: !props.running }">
+					<input v-model="steerMode" type="checkbox" :disabled="!props.running" />
+					<span>steer current run</span>
+				</label>
+				<span v-if="props.queueSteering" class="tiny">queued steering: {{ props.queueSteering }}</span>
+				<span v-if="props.queueFollowUp" class="tiny">queued follow-up: {{ props.queueFollowUp }}</span>
+				<span v-if="props.busyHint" class="tiny">{{ props.busyHint }}</span>
+			</div>
 		</div>
 	</div>
 </template>
-
-<style scoped>
-.composer {
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
-	border-top: 2px solid var(--px-neutral-6);
-	padding-top: 8px;
-}
-
-.composer-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-}
-
-.steer-toggle {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.queue {
-	display: inline-flex;
-	gap: 10px;
-}
-</style>
