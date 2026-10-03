@@ -97,6 +97,7 @@ npm run desktop:build    # 出 .app + .dmg
 | `probe/disconnect-probe.ts` | :7801 + 测试 agentDir | 审批断线：仍挂起、不自动放行、无副作用、重连仍收到、拒绝后没执行 | 7/7 |
 | `probe/markdown-probe.ts` | 无（离线） | 渲染各构件 + `<script>`/`<img onerror>`/`javascript:` 三种注入被中和 | 13/13 |
 | `probe/health-probe.ts` | 无（离线） | 健康指示 9 种状态映射与优先级 | 9/9 |
+| `probe/run-lifecycle-probe.ts` | :7799 | 运行生命周期：运行中 plain prompt 会被 pi 拒绝（所以我们必须带 `streamingBehavior`）、`followUp` 被接受（`disposition: queued`）、settle 后 plain prompt 又能用、`get_state.isStreaming` 是布尔 | 6/6 |
 | `probe/auth-probe.ts` | :7802 + 一次性 agentDir | provider 列表、**响应里不出现任何密钥值**（与真实 auth.json 比对）、OAuth 不可被 api key 覆盖、坏 provider/空 key 拒绝、写入合并、删除需确认、文件权限 600 | 11/11 |
 
 跑法：`node probe/<name>-probe.ts`（部分支持 `BASE=` / `WS_A=` / `REPO=` 环境变量覆盖）。
@@ -123,6 +124,13 @@ npm run desktop:build    # 出 .app + .dmg
 1. **`.pane` 必须 `flex: 0 0 auto`**：抽屉主体是「可滚动的 flex 列」，若面板允许收缩（`min-height: 0`），它会被压扁、内容被裁——表现就是"某一段显示不完全"。改样式时别把它改回可收缩。
 2. **长输出要给事实，不要静默截断**：shell 输出保留最近 200k 字符并显示"earlier N chars dropped"、pi 自己截断时显示 `pi truncated its response` + full log 路径；stats/tree/last assistant text 一律显示字符数 + Copy 按钮。新增长文本展示时照这个模式来。
 
+## 6.6 运行状态与错误条（血泪教训）
+
+- **`running` 必须由 `agent_end` / `agent_settled` 置回 false**，并且 `get_state.isStreaming` 要用来对账。曾经只在 `agent_start` 置 true → 首次运行后永久"运行中" → 之后每条消息都被 pi 以"streaming 必须指定 streamingBehavior"拒绝，看起来就是"出错后无法再正常回答"。
+- **运行中发消息必须带 `streamingBehavior`**：客户端在 `running` 时自动用 `followUp` 排队（并提示用户），不要发裸 `prompt`。
+- **错误条是短暂的**：新活动（发消息/开始运行/成功响应）会自动清掉，也可以点 `Dismiss`；真正的持续性问题（socket 断、pi 退出）由顶栏健康指示负责，不要塞进错误条。
+- 运行卡住时的恢复手段：`abort`（会顺带清错并重新拉 `get_state`）。
+
 ## 7. 故障排查
 
 | 现象 | 原因与处理 |
@@ -130,6 +138,7 @@ npm run desktop:build    # 出 .app + .dmg
 | 页面 `not found: / (the UI is not built yet)` | `dist/` 不存在或路径不对：先 `npm run build`；桌面版看 `--web-dir` 是否指向 `Resources/dist` |
 | 顶栏 `service closed` / `connecting…` | 服务没起或被 kill；浏览器会 1/2/4/8/15s 退避重连（**不重放任何消息**） |
 | 顶栏 `pi exited (1)` | pi 子进程崩了：看服务日志 stderr 原文；常见是模型/凭据问题 |
+| 出错后再也发不出消息 / 输入框一直显示 Stop | 运行标志没复位：见 §6.6；先按 `Stop`（abort）恢复，再确认 `agent_end`/`agent_settled` 的置位逻辑没被改坏 |
 | 审批弹窗不出现 | 只有 `select/confirm/input/editor` 是对话框；`policy` 处于 `auto` 模式时 ask 规则会被自动放行（有审计）；`/policy mode normal` 可恢复 |
 | 会话列表是空的 | 会话按 **cwd 的 realpath** 编码存放（`/tmp` → `--private-tmp--`）；切到正确的 workspace 再看 |
 | `git` 面板显示"not a git repository" | 当前 workspace 不是仓库（例如 `/tmp`） |

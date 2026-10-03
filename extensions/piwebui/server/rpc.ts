@@ -138,8 +138,12 @@ export class PiRpcChild extends EventEmitter {
 		return this.child.stdin.write(`${JSON.stringify(command)}\n`);
 	}
 
-	prompt(message: string, id = `prompt-${Date.now()}`): boolean {
-		return this.send({ id, type: "prompt", message });
+	/**
+	 * Send a user prompt. While a run is active pi requires `streamingBehavior`, otherwise it
+	 * rejects the command outright — so the caller states how the message should be delivered.
+	 */
+	prompt(message: string, behavior?: "steer" | "followUp" | null, id = `prompt-${Date.now()}`): boolean {
+		return this.send({ id, type: "prompt", message, ...(behavior ? { streamingBehavior: behavior } : {}) });
 	}
 
 	command(type: string, payload: Record<string, unknown> = {}, id?: string): boolean {

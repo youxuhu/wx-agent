@@ -178,7 +178,10 @@ onMounted(() => {
 				</footer>
 				<footer v-if="store.lastError" class="banner row">
 					<span class="chip chip-danger">error</span>
-					<span>{{ store.lastError }}</span>
+					<span v-if="store.lastErrorAt" class="tiny faint">{{ store.lastErrorAt }}</span>
+					<span class="err-body">{{ store.lastError }}</span>
+					<button v-if="store.running" class="btn btn-sm" @click="store.abort()">Stop the run</button>
+					<button class="btn btn-sm btn-ghost" @click="store.clearError()">Dismiss</button>
 				</footer>
 				<Composer
 					:running="store.running"

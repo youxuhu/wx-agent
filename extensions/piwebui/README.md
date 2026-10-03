@@ -282,6 +282,11 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 `node probe/preview-probe.ts`（需先按上面用法起服务）会真实起一个 dev server 并核对：无上游时拒绝、就绪判定、HTML/CSS 改写与脚本注入、CSP 放宽事实、JS 透传、`/__file/` 只读与越界拒绝、`stop` 后进程组确实消失。当前 **17/17 通过**。
 
+## 运行状态与错误显示
+
+- 输入框的 `Send` / `Stop` 跟随真实运行状态（`agent_start` 置位、`agent_end` / `agent_settled` 复位，并用 `get_state.isStreaming` 对账）；**运行中发送会自动按 follow-up 排队**并提示，不会因为协议要求 `streamingBehavior` 而被拒。
+- 错误条是**短暂**的：新活动（发消息 / 开始运行 / 成功响应）自动清除，也可以点 `Dismiss`；出错时若仍在运行，条上直接给 **Stop the run**。持续性问题（socket 断开、pi 退出）由顶栏健康指示表达，不混在错误条里。
+
 ## 已知限制
 
 - 代理只转发 HTTP：**dev server 的 WebSocket / HMR 通道没有转发**（页面能用，热更新不生效）；需要热更新请直接用浏览器打开 dev server。

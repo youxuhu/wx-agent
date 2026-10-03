@@ -774,7 +774,8 @@ function main(): void {
 				if (!text.trim()) return;
 				const workspace = resolve(message, socket, true);
 				if (!workspace) return;
-				if (!workspace.child.prompt(text)) socket.send(JSON.stringify({ type: "error", message: "pi rpc child is not running" }));
+				const behavior = message.streamingBehavior === "steer" || message.streamingBehavior === "followUp" ? message.streamingBehavior : undefined;
+				if (!workspace.child.prompt(text, behavior)) socket.send(JSON.stringify({ type: "error", message: "pi rpc child is not running" }));
 				return;
 			}
 			case "abort": {

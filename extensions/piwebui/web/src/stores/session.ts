@@ -56,6 +56,7 @@ export const useSessionStore = defineStore("session", {
 		pendingUi: [] as UiRequest[],
 		running: false,
 		lastError: "" as string,
+		lastErrorAt: "" as string,
 		stderr: [] as string[],
 		usage: null as null | { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number },
 		contextUsage: null as null | { tokens: number | null; contextWindow: number | null; percent: number | null },
@@ -191,14 +192,14 @@ export const useSessionStore = defineStore("session", {
 			});
 			socket.addEventListener("error", () => {
 				this.conn = "error";
-				this.lastError = "websocket error";
+				this.setError("websocket error");
 			});
 			socket.addEventListener("message", (event) => {
 				let payload: { type?: string; [key: string]: unknown };
 				try {
 					payload = JSON.parse(String(event.data));
 				} catch {
-					this.lastError = "malformed message from service";
+					this.setError("malformed message from service");
 					return;
 				}
 				this.handle(payload);
@@ -212,7 +213,7 @@ export const useSessionStore = defineStore("session", {
 				const data = event.data as { type?: string; payload?: PickPayload } | undefined;
 				if (!data || data.type !== "piwebui:pick" || !data.payload) return;
 				if (event.origin !== location.origin) {
-					this.lastError = `refused an element pick from origin ${event.origin}`;
+					this.setError(`refused an element pick from origin ${event.origin}`);
 					return;
 				}
 				this.picks = [
@@ -234,7 +235,7 @@ export const useSessionStore = defineStore("session", {
 				this.pendingSends = [...this.pendingSends, message].slice(-50);
 				return;
 			}
-			this.lastError = "not connected to the local service";
+			this.setError("not connected to the local service");
 		},
 
 		handle(payload: { type?: string; [key: string]: unknown }): void {
@@ -287,7 +288,7 @@ export const useSessionStore = defineStore("session", {
 						};
 						this.running = false;
 					}
-					if (payload.error) this.lastError = String(payload.error);
+					if (payload.error) this.setError(String(payload.error));
 					return;
 				}
 				case "pi_stderr": {
@@ -304,10 +305,10 @@ export const useSessionStore = defineStore("session", {
 					return;
 				}
 				case "malformed":
-					this.lastError = `pi sent a malformed record: ${String(payload.line ?? "").slice(0, 200)}`;
+					this.setError(`pi sent a malformed record: ${String(payload.line ?? "").slice(0, 200)}`);
 					return;
 				case "error":
-					this.lastError = String(payload.message ?? "unknown error");
+					this.setError(String(payload.message ?? "unknown error"));
 					return;
 				default:
 					return;
@@ -322,17 +323,20 @@ export const useSessionStore = defineStore("session", {
 			switch (record.type) {
 				case "agent_start":
 					this.running = true;
-					return;
-				case "agent_end":
-				case "compaction_end":
-					this.refreshContextUsage();
-					return;
-				case "agent_settled":
-					this.refreshContextUsage();
-					return;
-				case "agent_start":
 					this.speed = null;
 					this.speedSample = null;
+					this.clearError();
+					return;
+				case "agent_end":
+				case "agent_settled":
+					// The run is over: without this the composer stayed in "running" forever and every
+					// later prompt was rejected by pi ("streaming, specify streamingBehavior").
+					this.running = false;
+					this.speedSample = null;
+					this.refreshContextUsage();
+					return;
+				case "compaction_end":
+					this.refreshContextUsage();
 					return;
 				case "placeholder_agent_settled":
 					this.running = false;
@@ -357,7 +361,7 @@ export const useSessionStore = defineStore("session", {
 						// an errored response carries no content: report the provider error verbatim
 						if (message.stopReason === "error" || message.errorMessage) {
 							current.blocks = [{ kind: "text", text: `model error: ${message.errorMessage ?? message.stopReason ?? "unknown error"}` }];
-							this.lastError = `${message.errorMessage ?? message.stopReason ?? "model error"}`;
+							this.setError(`${message.errorMessage ?? message.stopReason ?? "model error"}`);
 						} else {
 							// replace the streamed deltas with the authoritative content blocks
 							current.blocks = messageToBlocks(message);
@@ -411,7 +415,7 @@ export const useSessionStore = defineStore("session", {
 					return;
 				case "auto_retry_end":
 					this.retry = null;
-					if (record.success === false) this.lastError = `retries exhausted: ${String(record.finalError ?? "")}`;
+					if (record.success === false) this.setError(`retries exhausted: ${String(record.finalError ?? "")}`);
 					return;
 				case "bash_execution_update": {
 					const delta = String(record.delta ?? "");
@@ -441,7 +445,7 @@ export const useSessionStore = defineStore("session", {
 					return;
 				}
 				case "extension_error":
-					this.lastError = `extension error: ${String(record.error ?? record.message ?? "").slice(0, 300)}`;
+					this.setError(`extension error: ${String(record.error ?? record.message ?? "").slice(0, 300)}`);
 					return;
 				case "usage":
 				case "turn_end": {
@@ -480,7 +484,7 @@ export const useSessionStore = defineStore("session", {
 			const command = String(record.command ?? "");
 			const data = (record.data ?? {}) as Record<string, unknown>;
 			if (record.success === false) {
-				this.lastError = `${command} failed: ${JSON.stringify(record.error ?? data).slice(0, 300)}`;
+				this.setError(`${command} failed: ${JSON.stringify(record.error ?? data).slice(0, 300)}`);
 				return;
 			}
 			switch (command) {
@@ -493,6 +497,8 @@ export const useSessionStore = defineStore("session", {
 					this.autoCompaction = typeof data.autoCompactionEnabled === "boolean" ? data.autoCompactionEnabled : this.autoCompaction;
 					this.steeringMode = String(data.steeringMode ?? this.steeringMode);
 					this.followUpMode = String(data.followUpMode ?? this.followUpMode);
+					// Reconcile: the authoritative flag, so a missed event cannot wedge the composer.
+					if (typeof data.isStreaming === "boolean") this.running = data.isStreaming;
 					return;
 				}
 				case "get_messages": {
@@ -501,7 +507,7 @@ export const useSessionStore = defineStore("session", {
 				}
 				case "switch_session":
 					if (data.cancelled) {
-						this.lastError = "pi cancelled the session switch (an extension blocked it)";
+						this.setError("pi cancelled the session switch (an extension blocked it)");
 						return;
 					}
 					this.send({ type: "get_state" });
@@ -559,7 +565,7 @@ export const useSessionStore = defineStore("session", {
 					return;
 				}
 				case "clone":
-					if (data.cancelled) this.lastError = "pi cancelled the clone (an extension blocked it)";
+					if (data.cancelled) this.setError("pi cancelled the clone (an extension blocked it)");
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
 				this.send({ type: "get_commands" });
@@ -568,7 +574,7 @@ export const useSessionStore = defineStore("session", {
 					return;
 				case "fork": {
 					if (data.cancelled) {
-						this.lastError = "pi cancelled the fork (an extension blocked it)";
+						this.setError("pi cancelled the fork (an extension blocked it)");
 						return;
 					}
 					this.send({ type: "get_state" });
@@ -593,7 +599,7 @@ export const useSessionStore = defineStore("session", {
 					this.send({ type: "list_sessions" });
 					return;
 				case "new_session":
-					if (data.cancelled) this.lastError = "pi cancelled the new session (an extension blocked it)";
+					if (data.cancelled) this.setError("pi cancelled the new session (an extension blocked it)");
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
 				this.send({ type: "get_commands" });
@@ -666,14 +672,26 @@ export const useSessionStore = defineStore("session", {
 		sendPrompt(text: string): void {
 			if (!text.trim()) return;
 			this.notice = "";
+			this.clearError();
 			this.notifyIfBuiltinCommand(text);
+			if (this.running) {
+				// pi rejects a plain prompt while streaming; queue it behind the current run and say so.
+				this.notice = "a run is still active — this message was queued as a follow-up";
+				this.send({ type: "prompt", message: text, streamingBehavior: "followUp" });
+				return;
+			}
 			this.send({ type: "prompt", message: text });
 		},
 		steer(text: string): void {
+			this.clearError();
 			this.send({ type: "steer", message: text });
 		},
 		abort(): void {
 			this.send({ type: "abort" });
+			// An abort is the user's recovery move: do not leave a stale error or a stuck flag.
+			this.clearError();
+			this.notice = "";
+			this.send({ type: "get_state" });
 		},
 		newSession(): void {
 			this.messages = [];
@@ -1119,6 +1137,20 @@ export const useSessionStore = defineStore("session", {
 				.catch((error: unknown) => {
 					this.defaultModelStatus = `failed: ${String(error)}`;
 				});
+		},
+
+		/** Errors are shown until they are dismissed or something works again. */
+		setError(message: string): void {
+			if (!message) return;
+			this.lastError = message;
+			this.lastErrorAt = new Date().toLocaleTimeString();
+			// Whatever went wrong, re-sync the run state so the next attempt is not blocked by a
+			// stale "running" flag.
+			this.send({ type: "get_state" });
+		},
+		clearError(): void {
+			this.lastError = "";
+			this.lastErrorAt = "";
 		},
 
 		requestCommands(): void {
