@@ -27,6 +27,10 @@ import {
 	type UiRequest,
 } from "../types.ts";
 
+/** Extension status/notify texts are colorized for the terminal; the browser must not show escapes. */
+const ANSI = /\u001b\[[0-9;]*m/g;
+const stripAnsi = (value: string): string => value.replace(ANSI, "");
+
 /** Only these extension UI methods are dialogs that expect an answer. */
 const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
 
@@ -48,7 +52,10 @@ export const useSessionStore = defineStore("session", {
 		running: false,
 		lastError: "" as string,
 		stderr: [] as string[],
-		usage: null as null | { input: number; output: number; totalTokens: number; cost: number },
+		usage: null as null | { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number },
+		contextUsage: null as null | { tokens: number | null; contextWindow: number | null; percent: number | null },
+		notice: "" as string,
+		speed: null as null | number,
 		queueSteering: 0,
 		queueFollowUp: 0,
 		status: {} as Record<string, string>,
@@ -89,6 +96,7 @@ export const useSessionStore = defineStore("session", {
 		shellRunning: false,
 		shellExcluded: true,
 		pendingSends: [] as Record<string, unknown>[],
+		speedSample: null as null | { output: number; at: number },
 		autoCompaction: null as boolean | null,
 		autoRetry: null as boolean | null,
 		steeringMode: "" as string,
@@ -112,6 +120,10 @@ export const useSessionStore = defineStore("session", {
 				this.send({ type: "get_state" });
 				this.send({ type: "list_sessions" });
 				this.send({ type: "preview_status" });
+				this.send({ type: "get_session_stats" });
+				// a reload must not lose the conversation: ask for the current messages
+				this.send({ type: "get_messages" });
+				this.send({ type: "get_commands" });
 			});
 			socket.addEventListener("close", () => {
 				this.conn = "closed";
@@ -236,7 +248,17 @@ export const useSessionStore = defineStore("session", {
 					this.running = true;
 					return;
 				case "agent_end":
+				case "compaction_end":
+					this.refreshContextUsage();
+					return;
 				case "agent_settled":
+					this.refreshContextUsage();
+					return;
+				case "agent_start":
+					this.speed = null;
+					this.speedSample = null;
+					return;
+				case "placeholder_agent_settled":
 					this.running = false;
 					for (const message of this.messages) message.done = true;
 					return;
@@ -327,7 +349,7 @@ export const useSessionStore = defineStore("session", {
 					const request = record as unknown as UiRequest & { statusText?: string; statusKey?: string; text?: string };
 					if (!DIALOG_METHODS.has(request.method)) {
 						// one-way status/notify records are not approvals
-						this.status[request.statusKey ?? request.method] = String(request.statusText ?? request.text ?? "");
+						this.status[request.statusKey ?? request.method] = stripAnsi(String(request.statusText ?? request.text ?? ""));
 						return;
 					}
 					if (!this.pendingUi.some((item) => item.id === request.id)) this.pendingUi.push(request);
@@ -339,16 +361,28 @@ export const useSessionStore = defineStore("session", {
 				case "usage":
 				case "turn_end": {
 					const usage = (record.usage ?? (record as { message?: { usage?: unknown } }).message?.usage) as
-						| { input?: number; output?: number; totalTokens?: number; cost?: { total?: number } }
+						| {
+								input?: number;
+								output?: number;
+								cacheRead?: number;
+								cacheWrite?: number;
+								totalTokens?: number;
+								cost?: { total?: number };
+						  }
 						| undefined;
 					if (usage) {
+						const output = usage.output ?? 0;
 						this.usage = {
 							input: usage.input ?? 0,
-							output: usage.output ?? 0,
+							output,
+							cacheRead: usage.cacheRead ?? 0,
+							cacheWrite: usage.cacheWrite ?? 0,
 							totalTokens: usage.totalTokens ?? 0,
 							cost: usage.cost?.total ?? 0,
 						};
+						this.trackSpeed(output);
 					}
+					if (record.type === "turn_end") this.refreshContextUsage();
 					return;
 				}
 				default:
@@ -387,6 +421,7 @@ export const useSessionStore = defineStore("session", {
 					}
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
+				this.send({ type: "get_commands" });
 					this.send({ type: "list_sessions" });
 					return;
 				case "get_commands": {
@@ -404,6 +439,10 @@ export const useSessionStore = defineStore("session", {
 				}
 				case "get_session_stats": {
 					this.stats = data as SessionStats;
+					const context = (data.contextUsage ?? null) as { tokens?: number | null; contextWindow?: number | null; percent?: number | null } | null;
+					this.contextUsage = context
+						? { tokens: context.tokens ?? null, contextWindow: context.contextWindow ?? null, percent: context.percent ?? null }
+						: { tokens: null, contextWindow: null, percent: null };
 					return;
 				}
 				case "get_tree": {
@@ -434,6 +473,7 @@ export const useSessionStore = defineStore("session", {
 					if (data.cancelled) this.lastError = "pi cancelled the clone (an extension blocked it)";
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
+				this.send({ type: "get_commands" });
 					this.send({ type: "list_sessions" });
 					return;
 				case "fork": {
@@ -443,6 +483,7 @@ export const useSessionStore = defineStore("session", {
 					}
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
+				this.send({ type: "get_commands" });
 					this.send({ type: "list_sessions" });
 					return;
 				}
@@ -464,6 +505,7 @@ export const useSessionStore = defineStore("session", {
 					if (data.cancelled) this.lastError = "pi cancelled the new session (an extension blocked it)";
 					this.send({ type: "get_state" });
 					this.send({ type: "get_messages" });
+				this.send({ type: "get_commands" });
 					this.send({ type: "list_sessions" });
 					return;
 				default:
@@ -531,6 +573,8 @@ export const useSessionStore = defineStore("session", {
 		// ---- actions the UI calls ----
 		sendPrompt(text: string): void {
 			if (!text.trim()) return;
+			this.notice = "";
+			this.notifyIfBuiltinCommand(text);
 			this.send({ type: "prompt", message: text });
 		},
 		steer(text: string): void {
@@ -557,6 +601,26 @@ export const useSessionStore = defineStore("session", {
 		compact(): void {
 			this.send({ type: "compact" });
 		},
+		/** Output tokens per second between consecutive usage reports of a run. */
+		trackSpeed(output: number): void {
+			const now = performance.now();
+			if (!this.speedSample) {
+				this.speedSample = { output, at: now };
+				return;
+			}
+			const seconds = (now - this.speedSample.at) / 1000;
+			const delta = output - this.speedSample.output;
+			if (seconds < 0.4 || delta <= 0) return;
+			const sample = delta / seconds;
+			// light smoothing so the number does not jump between deltas
+			this.speed = this.speed === null ? sample : this.speed * 0.6 + sample * 0.4;
+			this.speedSample = { output, at: now };
+		},
+
+		refreshContextUsage(): void {
+			this.send({ type: "get_session_stats" });
+		},
+
 		requestPreview(): void {
 			this.send({ type: "preview_status" });
 		},
@@ -661,6 +725,23 @@ export const useSessionStore = defineStore("session", {
 			this.showControl = true;
 			if (tab) this.controlTab = tab;
 		},
+		/**
+		 * Built-in TUI commands (`/model`, `/settings`, …) are not in pi's discoverable
+		 * command list and are not executed over RPC — they would be delivered to the model
+		 * as plain text. Say so instead of letting it look like a command ran.
+		 */
+		notifyIfBuiltinCommand(text: string): void {
+			const match = text.trim().match(/^\/([A-Za-z0-9:._-]+)/);
+			if (!match) return;
+			const name = match[1];
+			if (this.commands.some((command) => command.name === name)) return;
+			if (!this.commands.length) {
+				this.notice = `"/${name}" is not in pi's command list yet (not loaded) — discoverable commands run by sending them; built-in TUI-only commands cannot run over RPC.`;
+				return;
+			}
+			this.notice = `"/${name}" is not a discoverable command, so it was sent to the model as plain text. Built-in TUI-only commands (/model, /settings, /hotkeys, /login, /reload, …) have no RPC path — use the control drawer for model/thinking/session and the terminal for /reload.`;
+		},
+
 		requestCommands(): void {
 			this.send({ type: "get_commands" });
 		},

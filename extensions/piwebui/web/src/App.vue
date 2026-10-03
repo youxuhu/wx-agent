@@ -11,6 +11,7 @@ import ApprovalDialog from "./components/ApprovalDialog.vue";
 import SessionDrawer from "./components/SessionDrawer.vue";
 import PreviewPanel from "./components/PreviewPanel.vue";
 import ControlDrawer from "./components/ControlDrawer.vue";
+import StatusBar from "./components/StatusBar.vue";
 import { useSessionStore } from "./stores/session.ts";
 
 const store = useSessionStore();
@@ -52,6 +53,13 @@ onMounted(() => {
 			<Tag theme="danger">error</Tag>
 			<span>{{ store.lastError }}</span>
 		</footer>
+
+		<footer v-if="store.notice" class="err">
+			<Tag theme="warning">notice</Tag>
+			<span>{{ store.notice }}</span>
+		</footer>
+
+		<StatusBar />
 
 		<Composer
 			:running="store.running"

@@ -48,6 +48,27 @@ cwd 先做 realpath，故 `/tmp` 落到 `--private-tmp--`）。列表包含：�
 - **invariant**：只允许切换到**当前 cwd 会话目录内**的 `.jsonl`；其他路径一律拒绝并报事实。
 - 界面：标题栏 `sessions` 按钮打开抽屉，行内显示 `current` / `switch`、时间、条数、大小与首句。
 
+## 状态栏（把终端页脚搬到浏览器）
+
+底部一行复刻终端页脚的信息，全部来自真实上报：
+
+| 段 | 来源 |
+| --- | --- |
+| `↑in ↓out R(cache read) W(cache write) CH% $cost` | `get_session_stats.tokens/cost`（**会话累计**，与终端页脚同源）；统计未到时回退到实时 `usage`（`message_update` / `turn_end`） |
+| `CH%` | `cacheRead / (input + cacheRead + cacheWrite)`（与 `llm-speed` 的实现同式） |
+| `x%/window` | `get_session_stats.contextUsage`（pi 的压缩估算；压缩刚结束时 `percent`/`tokens` 为 `null`，如实显示 `?`） |
+| `N t/s` | 浏览器自己按相邻两次 usage 报告的 output 增量 ÷ 时间算（同样的定义、带平滑） |
+| `policy:auto`、`⎇ branch`、`LSP Active: …`、`Sandbox: …` | 扩展的 `setStatus` 单向记录（**ANSI 颜色码会剥掉**，否则页面上是乱码） |
+| 右侧 `provider/model • thinking` | `get_state` |
+
+刷新时机：连接时、`turn_end`、`compaction_end`、`agent_settled`。连接时也会拉一次 `get_messages`，所以**刷新页面不会丢对话**。
+
+**已知限制**：`setStatus` 是单向推送，RPC 没有"读取当前状态"的命令 → 页面刷新后这些扩展状态会空着，直到该扩展再次上报（在终端或 control 抽屉里触发一次 `/policy status`、`/git` 等即可）。
+
+### 在浏览器里发 `/xxx` 会发生什么
+
+pi 的**内置 TUI 命令**（`/model` `/settings` `/hotkeys` `/login` `/reload` …）不在 `get_commands` 里，经 `prompt` 发送也不会被执行——会被当普通文本发给模型。浏览器会为此显示一条 notice 说明事实，并把模型/思考/会话指向 control 抽屉；可枚举的命令（扩展命令 / 模板 / 技能）才真正执行。
+
 ## 控制面（把 TUI 能干的事搬到浏览器）
 
 标题栏 `control` 按钮 → 右侧抽屉，五个分页，全部是**真实 RPC 命令**，没有假按钮：
