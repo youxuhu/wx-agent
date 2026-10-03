@@ -54,6 +54,13 @@ node probe/ws-probe.ts "reply with exactly: pong" --seconds 90
 4. **单向记录不误判**：`notify`/`setStatus`/`setWidget`/`setTitle`/`set_editor_text` 只在 UI 显示，不等待回答。
 5. **不吞错**：模型错误（如 429）、重试、扩展错误、子进程 stderr 都原样送到界面。
 
+## 主题
+
+**只使用浅色（白底）**：`web/index.html` 与启动脚本都把 `<html>` 固定为 `light`，
+并声明 `<meta name="color-scheme" content="light">`。Pixelium 的 `:root.light`
+选择器比它的 `prefers-color-scheme: dark` 媒体查询优先级更高，因此在系统深色模式下
+界面同样是白底（已在本机 Dark 模式下实测）。深色开关已从界面移除。
+
 ## 已知限制
 
 - 前端依赖 `@pixelium/web-vue@0.2.1-delta`（预发布版本号）。

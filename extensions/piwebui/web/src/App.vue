@@ -4,14 +4,13 @@
  * Facts only — every badge shows what the service reported.
  */
 import { onMounted } from "vue";
-import { Badge, Button, Space, Switch, Tag, useThemeMode } from "@pixelium/web-vue";
+import { Badge, Button, Space, Tag } from "@pixelium/web-vue";
 import MessageList from "./components/MessageList.vue";
 import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
 import { useSessionStore } from "./stores/session.ts";
 
 const store = useSessionStore();
-const theme = useThemeMode();
 
 onMounted(() => store.connect());
 </script>
@@ -26,7 +25,6 @@ onMounted(() => store.connect());
 			<span class="dim ellipsis">{{ store.cwd }}</span>
 			<Space class="head-right">
 				<Badge v-if="store.pendingUi.length" theme="danger">{{ store.pendingUi.length }} approval{{ store.pendingUi.length > 1 ? "s" : "" }}</Badge>
-				<Switch v-model="theme.mode" checked-value="dark" unchecked-value="light" size="small" />
 				<Button size="small" variant="text" @click="store.newSession()">new session</Button>
 				<Button size="small" variant="text" @click="store.compact()">compact</Button>
 			</Space>
