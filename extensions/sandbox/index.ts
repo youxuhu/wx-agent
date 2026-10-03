@@ -224,11 +224,11 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const statusText = () => {
-		if (!sandboxEnabled) return lastError ? `🔓 Sandbox off (${lastError})` : "🔓 Sandbox off";
+		if (!sandboxEnabled) return lastError ? `Sandbox off (${lastError})` : "Sandbox off";
 		const cfg = SandboxManager.getConfig();
 		const domains = cfg?.network?.allowedDomains?.length ?? 0;
 		const writes = cfg?.filesystem?.allowWrite?.length ?? 0;
-		return `🔒 Sandbox: ${domains} domains, ${writes} write paths`;
+		return `Sandbox: ${domains} domains, ${writes} write paths`;
 	};
 
 	// Sandboxed bash replaces the built-in tool; when disabled the original runs untouched.
