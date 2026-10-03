@@ -183,6 +183,7 @@ interface RawAxNode {
 const ACTIVATE_SWIFT = `
 import Foundation
 import AppKit
+import ApplicationServices
 let target = ProcessInfo.processInfo.environment["CUA_TARGET"] ?? ""
 var best: NSRunningApplication? = nil
 if !target.isEmpty {
@@ -200,12 +201,23 @@ var pid: Int32 = -1
 var appName = ""
 var bundleId = ""
 if let a = best {
-  var opts: NSApplication.ActivationOptions = []
-if ProcessInfo.processInfo.environment["CUA_FORCE"] == "1" { opts = [.activateAllWindows] }
-ok = a.activate(options: opts)
+  var opts: NSApplication.ActivationOptions = [.activateAllWindows]
+  ok = a.activate(options: opts)
   pid = a.processIdentifier
   appName = a.localizedName ?? ""
   bundleId = a.bundleIdentifier ?? ""
+  // Un-minimize: a minimized frontmost app reports focus but has no on-screen
+  // window (the trap that hit the Music test) — restore via AX so clicks land.
+  if pid > 0 {
+    let appEl = AXUIElementCreateApplication(pid)
+    var winsRef: CFTypeRef?
+    let axErr = AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute as CFString, &winsRef)
+    if axErr == .success, let wins = winsRef as? [AXUIElement] {
+      for w in wins {
+        AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+      }
+    }
+  }
 }
 let result: [String: Any] = ["ok": ok, "pid": pid, "appName": appName, "bundleId": bundleId]
 let d = try! JSONSerialization.data(withJSONObject: result)
