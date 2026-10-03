@@ -186,17 +186,23 @@ import AppKit
 let target = ProcessInfo.processInfo.environment["CUA_TARGET"] ?? ""
 var best: NSRunningApplication? = nil
 if !target.isEmpty {
+  let t = target.lowercased()
   for a in NSWorkspace.shared.runningApplications {
     guard a.activationPolicy == .regular else { continue }
-    if a.bundleIdentifier == target || a.localizedName == target { best = a; break }
+    let name = a.localizedName?.lowercased() ?? ""
+    // exact match first; then prefix/contains so "safari" hits "Safari浏览器"
+    if a.bundleIdentifier == target || a.localizedName == target || name == t
+       || name.hasPrefix(t) || name.contains(t) { best = a; break }
   }
 }
 var ok = false
-var pid = -1
+var pid: Int32 = -1
 var appName = ""
 var bundleId = ""
 if let a = best {
-  ok = a.activate(options: [])
+  var opts: NSApplication.ActivationOptions = []
+if ProcessInfo.processInfo.environment["CUA_FORCE"] == "1" { opts = [.activateAllWindows] }
+ok = a.activate(options: opts)
   pid = a.processIdentifier
   appName = a.localizedName ?? ""
   bundleId = a.bundleIdentifier ?? ""
@@ -377,11 +383,20 @@ export function createAdapter(): PlatformAdapter {
 		async activateApp(target: string): Promise<void> {
 			const t = target.trim();
 			if (!t) throw new Error("activateApp: empty target");
-			try {
-				const r = runSwiftJSON<{ ok: boolean; pid: number }>(ACTIVATE_SWIFT, SWIFT_TIMEOUT_MS, { CUA_TARGET: t });
-				if (r.ok) return;
-			} catch {
-				/* fall through to open(1) fallbacks */
+			// NSRunningApplication.activate can transiently return false when the
+			// caller is a background process (macOS activation race) — retry once
+			// with [.activateAllWindows], then fall through to open(1) fallbacks.
+			for (const force of ["", "1"]) {
+				try {
+					const r = runSwiftJSON<{ ok: boolean; pid: number }>(ACTIVATE_SWIFT, SWIFT_TIMEOUT_MS, {
+						CUA_TARGET: t,
+						CUA_FORCE: force,
+					});
+					if (r.ok) return;
+				} catch {
+					break; // swift itself failed (compile/runtime) — open(1) fallbacks
+				}
+				await new Promise((res) => setTimeout(res, 300));
 			}
 			const tryOpen = (args: string[]): boolean => {
 				const r = spawnSync("open", args, { timeout: SWIFT_TIMEOUT_MS });

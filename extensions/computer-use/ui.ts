@@ -42,6 +42,11 @@ full    = 截图 + 控件树 + 窗口清单。自动触发：任务首个观察 
 tree    = 控件树 + 窗口清单，纯文本 0 图像 token（默认）。
 minimal = 一行状态回执（hash + 焦点窗口），用于 3 秒内重复的 (action,target)。
 
+== 播放器/网页应用技巧 ==
+视频/音频站点的播放器控件几乎总在 a11y 树里：先 list 一次树，找 Button "播放/暂停"、
+时间戳 StaticText（如 "01:16 / 03:48"）、倍速/全屏等，直接 element index 点击，无需截图猜坐标。
+验证是否在播：两次观察比对时间戳文本或 stateHash 是否推进；wait 动作 0 成本。
+
 == 坐标系 (§3) ==
 full 观察的截图坐标 = raster 系（图片实际像素）；tree 观察的控件坐标 = logical 系
 （屏幕点）。element index 自动对应正确坐标系；手写 x/y 时只能用于 raster（最近截图）。
