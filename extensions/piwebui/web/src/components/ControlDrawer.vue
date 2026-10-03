@@ -6,13 +6,39 @@
  * `set_thinking_level`, `get_tree`, `fork`, `bash`, …). Facts only: responses and
  * refusals are printed as they arrive, and nothing is retried or guessed.
  */
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { Button, Divider, Drawer, Input, Space, Switch, Tag, Textarea } from "@pixelium/web-vue";
 import { useSessionStore } from "../stores/session.ts";
 
 const store = useSessionStore();
 
 const TABS = ["commands", "model", "session", "shell", "config"] as const;
+
+const renameDraft = ref("");
+
+/** Session rows: facts read from disk by the service, current one marked. */
+const sessionRows = computed(() =>
+	store.sessions.map((session) => ({
+		...session,
+		isCurrent: session.path === store.currentSessionPath,
+		title: session.name || session.firstPrompt || session.id,
+		when: formatWhen(session.updatedAt),
+		size: `${Math.max(1, Math.round(session.sizeBytes / 1024))}KB`,
+	})),
+);
+
+function formatWhen(iso: string): string {
+	const date = new Date(iso);
+	if (Number.isNaN(date.getTime())) return iso;
+	return date.toLocaleString();
+}
+
+function renameSession(): void {
+	const name = renameDraft.value.trim();
+	if (!name) return;
+	store.renameSession(name);
+	renameDraft.value = "";
+}
 const STEERING_MODES = ["all", "one-at-a-time"];
 const FOLLOW_UP_MODES = ["one-at-a-time", "all"];
 
@@ -37,7 +63,10 @@ function onTab(tab: string): void {
 		if (!store.thinkingLevels.length) store.requestThinkingLevels();
 		store.send({ type: "get_state" });
 	}
-	if (tab === "session") store.requestStats();
+	if (tab === "session") {
+		store.requestStats();
+		store.listSessions();
+	}
 	if (tab === "config" && !store.configFiles.length) store.loadConfigFiles();
 }
 
@@ -120,6 +149,27 @@ watch(() => store.showControl, (open) => {
 
 		<!-- session tools -->
 		<section v-else-if="store.controlTab === 'session'" class="pane">
+			<!-- session switcher (the header button was removed in favour of this tab) -->
+			<Space>
+				<Button size="small" @click="store.newSession()">new session</Button>
+				<Button size="small" variant="outline" @click="store.listSessions()">refresh list</Button>
+				<Button size="small" variant="outline" @click="store.compact()">compact</Button>
+				<Tag size="small">{{ sessionRows.length }} in {{ store.cwd }}</Tag>
+			</Space>
+			<div class="row">
+				<Input v-model="renameDraft" size="small" :placeholder="store.sessionName || 'rename current session…'" @keydown.enter="renameSession()" />
+				<Button size="small" variant="outline" :disabled="!renameDraft.trim()" @click="renameSession()">rename</Button>
+			</div>
+			<p class="dim">current: {{ store.sessionName || "(unnamed)" }} — {{ store.currentSessionPath || "?" }}</p>
+			<div v-for="row in sessionRows" :key="row.path" class="session-row">
+				<Tag size="small" :theme="row.isCurrent ? 'success' : 'notice'">{{ row.isCurrent ? "current" : "switch" }}</Tag>
+				<Button v-if="!row.isCurrent" size="small" variant="text" @click="store.switchSession(row.path)">switch</Button>
+				<span class="dim">{{ row.when }}</span>
+				<span class="dim">{{ row.messageCount }} msg · {{ row.size }}</span>
+				<span class="dim ellipsis">{{ row.title }}</span>
+			</div>
+			<p v-if="!sessionRows.length" class="dim">no sessions for this directory yet</p>
+			<Divider />
 			<Space>
 				<Button size="small" @click="store.requestStats()">stats</Button>
 				<Button size="small" variant="outline" @click="store.requestTree()">tree</Button>
@@ -207,7 +257,16 @@ watch(() => store.showControl, (open) => {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	max-width: 260px;
+	max-width: 300px;
+}
+
+.session-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	border-bottom: 1px solid var(--px-neutral-3, #eee);
+	padding-bottom: 2px;
 }
 
 .log {

@@ -8,7 +8,6 @@ import { Badge, Button, Space, Tag } from "@pixelium/web-vue";
 import MessageList from "./components/MessageList.vue";
 import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
-import SessionDrawer from "./components/SessionDrawer.vue";
 import PreviewPanel from "./components/PreviewPanel.vue";
 import ControlDrawer from "./components/ControlDrawer.vue";
 import StatusBar from "./components/StatusBar.vue";
@@ -35,7 +34,6 @@ onMounted(() => {
 				<Tag v-if="store.sessionName" theme="notice">{{ store.sessionName }}</Tag>
 				<Button size="small" :variant="store.showControl ? 'primary' : 'text'" @click="store.openControl()">control</Button>
 				<Button size="small" :variant="store.showPreview ? 'primary' : 'text'" @click="store.showPreview = !store.showPreview">preview</Button>
-				<Button size="small" variant="text" @click="store.showSessions = true">sessions</Button>
 			</Space>
 		</header>
 
@@ -78,7 +76,6 @@ onMounted(() => {
 			@confirm="store.answerConfirm($event.id, $event.confirmed)"
 		/>
 
-		<SessionDrawer />
 		<ControlDrawer />
 	</div>
 </template>

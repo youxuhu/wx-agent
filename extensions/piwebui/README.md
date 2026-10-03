@@ -35,7 +35,19 @@ node server/main.ts --port 7799 --cwd /path/to/project \
 node probe/ws-probe.ts "reply with exactly: pong" --seconds 90
 ```
 
+## 可读性（字号）
+
+Pixelium 的组件字号是**写死的 px**（12/14/15px），`setPixelSize` 只重算组件盒子尺寸、不改字号，所以在 `web/src/styles/app.css` 里对整页做了一次缩放：
+
+```css
+html { zoom: 1.3; }   /* 想更大/更小就改这一个数 */
+```
+
+整页统一缩放（文字、边框、抽屉、对话框一起变），代价是布局视口变窄（1280 物理像素 ≈ 984 CSS px）；代码块与长段落也加了 `pre-wrap` + `overflow-wrap: anywhere`，不会因为放大而被裁切。**注意**：加了 `zoom` 之后，系统的无障碍坐标空间是缩放前的，自动化点击要用元素索引而不是绝对像素。
+
 ## 会话列表与切换
+
+**入口**：`control` 抽屉 → `session` 页（标题栏不再单放按钮）。里面是：`new session` / `refresh list` / `compact` / 重命名 / 当前会话名与路径 / 本目录会话列表（`current` 与 `switch`），同一页往下还有统计、会话树、fork、clone、export、最后一条助手文本。
 
 `/api/sessions`（以及 WS 的 `list_sessions`）从磁盘读当前 cwd 的会话文件（pi 存于
 `<agentDir>/sessions/<cwd 编码>/<时间戳>_<id>.jsonl`；编码为 `--` + 去掉前导 `/` 并把 `/`→`-` + `--`，

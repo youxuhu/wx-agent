@@ -62,7 +62,6 @@ export const useSessionStore = defineStore("session", {
 		sessions: [] as SessionSummary[],
 		currentSessionPath: null as string | null,
 		sessionName: null as string | null,
-		showSessions: false,
 		model: "" as string,
 		thinkingLevel: "" as string,
 		retry: null as null | { attempt: number; max: number; reason: string },

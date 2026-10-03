@@ -5,6 +5,15 @@
 	--ui-line: var(--px-neutral-6);
 }
 
+/*
+ * Readability: Pixelium ships hard-coded 12-15px pixel fonts (setPixelSize only rescales
+ * component boxes, not text), so the whole UI is scaled once here. Tune this single value
+ * to taste; integer steps keep the pixel font crisp.
+ */
+html {
+	zoom: 1.3;
+}
+
 html,
 body,
 #app {
@@ -31,4 +40,11 @@ body,
 
 .dim {
 	color: var(--ui-dim);
+}
+
+/* Scaled text must wrap instead of being clipped in code blocks and long paragraphs. */
+pre,
+code {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
