@@ -17,6 +17,7 @@ import { dirname } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { PiRpcChild, type RpcRecord, type UiRequest } from "./rpc.ts";
 import { isSessionPathOf, listSessions } from "./sessions.ts";
+import { DevServer, FILE_PREFIX, PROXY_PREFIX, filePreview, loadPreviewConfig, proxyRequest, resolveProject } from "./preview.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, "..");
@@ -96,6 +97,29 @@ function main(): void {
 	/** Last session file the child reported, used to mark the current row in listings. */
 	let currentSessionPath: string | null = null;
 
+	// Preview side: config read once at start, one owned dev server, one pinned upstream.
+	const previewConfigPromise = loadPreviewConfig(agentDir);
+	let previewProject = resolveProject(args.cwd, { projects: {} }).project;
+	void previewConfigPromise.then((loaded) => {
+		previewProject = resolveProject(args.cwd, loaded).project;
+	});
+	const previewRootPromise = previewConfigPromise.then((loaded) => resolveProject(args.cwd, loaded).project.root ?? args.cwd);
+	const devServer = new DevServer(args.cwd, {
+		onStatus: (status) => broadcastPreview(status),
+		onLog: () => undefined,
+	});
+	const previewInfo = (): Record<string, unknown> => ({
+		type: "preview",
+		status: devServer.getStatus(),
+		project: { command: previewProject.command ?? null, port: previewProject.port ?? null, readyPattern: previewProject.readyPattern ?? null, configured: Boolean(previewProject.command) },
+		proxyPrefix: PROXY_PREFIX,
+		filePrefix: FILE_PREFIX,
+	});
+	function broadcastPreview(status: ReturnType<DevServer["getStatus"]>): void {
+		const payload = JSON.stringify({ ...previewInfo(), status });
+		for (const client of wss.clients) if (client.readyState === 1) client.send(payload);
+	}
+
 	// Invariant: loopback only. A non-loopback host would expose the session to the network.
 	const loopback = new Set(["127.0.0.1", "localhost", "::1"]);
 	if (!loopback.has(args.host)) {
@@ -128,6 +152,27 @@ function main(): void {
 					res.writeHead(500, { "content-type": "application/json" });
 					res.end(JSON.stringify({ error: String(error) }));
 				});
+			return;
+		}
+		if (url.pathname === "/api/preview") {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify(previewInfo()));
+			return;
+		}
+		if (url.pathname === PROXY_PREFIX || url.pathname.startsWith(`${PROXY_PREFIX}/`)) {
+			const status = devServer.getStatus();
+			// Invariant: one pinned loopback upstream (the dev server); no arbitrary targets.
+			if (!status.port) {
+				res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+				res.end(`refused: no local dev server upstream (state ${status.state}${status.error ? `, ${status.error}` : ""}) — start it first, or the configured port is unknown`);
+				return;
+			}
+			void proxyRequest(req, res, { upstreamHost: "127.0.0.1", upstreamPort: status.port, pathname: url.pathname, search: url.search });
+			return;
+		}
+		if (url.pathname === FILE_PREFIX || url.pathname.startsWith(`${FILE_PREFIX}/`)) {
+			const requested = url.searchParams.get("path") ?? decodeURIComponent(url.pathname.slice(FILE_PREFIX.length));
+			void previewRootPromise.then((root) => filePreview(res, root, requested));
 			return;
 		}
 		void serveStatic(url.pathname, res);
@@ -238,6 +283,21 @@ function main(): void {
 				broadcast({ type: "ui_resolved", id, response });
 				return;
 			}
+			case "preview_status":
+				socket.send(JSON.stringify(previewInfo()));
+				return;
+			case "dev_start": {
+				const command = typeof message.command === "string" && message.command.trim() ? message.command.trim() : undefined;
+				const port = typeof message.port === "number" ? message.port : undefined;
+				void previewConfigPromise.then(() => {
+					const next = devServer.start(previewProject, { command, port });
+					broadcast({ ...previewInfo(), status: next });
+				});
+				return;
+			}
+			case "dev_stop":
+				broadcast({ ...previewInfo(), status: devServer.stop() });
+				return;
 			default:
 				socket.send(JSON.stringify({ type: "error", message: `unknown client message type: ${type}` }));
 		}
@@ -294,6 +354,7 @@ function main(): void {
 	});
 
 	const shutdown = (): void => {
+		devServer.dispose();
 		child.stop();
 		wss.close();
 		server.close(() => process.exit(0));

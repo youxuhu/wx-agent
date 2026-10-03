@@ -14,6 +14,9 @@ import {
 	messageToText,
 	type ChatMessage,
 	type ConnState,
+	type PickPayload,
+	type PickRecord,
+	type PreviewInfo,
 	type SessionSummary,
 	type ToolRun,
 	type UiRequest,
@@ -51,6 +54,16 @@ export const useSessionStore = defineStore("session", {
 		model: "" as string,
 		thinkingLevel: "" as string,
 		retry: null as null | { attempt: number; max: number; reason: string },
+		// preview side
+		previewInfo: null as PreviewInfo | null,
+		showPreview: false,
+		previewUrl: "" as string,
+		previewError: "" as string,
+		pickMode: false,
+		picks: [] as PickRecord[],
+		composerDraft: "" as string,
+		composerSeq: 0,
+		previewFrameKey: 0,
 	}),
 
 	actions: {
@@ -61,9 +74,10 @@ export const useSessionStore = defineStore("session", {
 
 			socket.addEventListener("open", () => {
 				this.conn = "open";
-				// hydrate: current session + the session list
+				// hydrate: current session + the session list + dev server state
 				this.send({ type: "get_state" });
 				this.send({ type: "list_sessions" });
+				this.send({ type: "preview_status" });
 			});
 			socket.addEventListener("close", () => {
 				this.conn = "closed";
@@ -85,6 +99,23 @@ export const useSessionStore = defineStore("session", {
 			(this as unknown as { socket: WebSocket }).socket = socket;
 		},
 
+		/** Picker results arrive as window messages from the same-origin iframe. */
+		listenForPicks(): void {
+			window.addEventListener("message", (event: MessageEvent) => {
+				const data = event.data as { type?: string; payload?: PickPayload } | undefined;
+				if (!data || data.type !== "piwebui:pick" || !data.payload) return;
+				if (event.origin !== location.origin) {
+					this.lastError = `refused an element pick from origin ${event.origin}`;
+					return;
+				}
+				this.picks = [
+					...this.picks,
+					{ id: `pick-${Date.now()}-${this.picks.length}`, at: new Date().toLocaleTimeString(), note: "", payload: data.payload },
+				].slice(-20);
+				this.lastError = "";
+			});
+		},
+
 		send(message: Record<string, unknown>): void {
 			const socket = (this as unknown as { socket?: WebSocket }).socket;
 			if (socket?.readyState === 1) socket.send(JSON.stringify(message));
@@ -100,6 +131,15 @@ export const useSessionStore = defineStore("session", {
 					this.exitInfo = (payload.exitInfo as typeof this.exitInfo) ?? null;
 					const pending = (payload.pendingUi as UiRequest[] | undefined) ?? [];
 					this.pendingUi = pending;
+					return;
+				}
+				case "preview": {
+					const info = payload as unknown as PreviewInfo;
+					const wasReady = this.previewInfo?.status.state === "ready";
+					this.previewInfo = info;
+					if (!this.previewUrl && info.status.port) this.previewUrl = `${info.proxyPrefix}/`;
+					// A fresh upstream that just became ready: reload the frame once (no polling).
+					if (info.status.state === "ready" && !wasReady) this.previewFrameKey++;
 					return;
 				}
 				case "sessions": {
@@ -400,6 +440,105 @@ export const useSessionStore = defineStore("session", {
 		compact(): void {
 			this.send({ type: "compact" });
 		},
+		requestPreview(): void {
+			this.send({ type: "preview_status" });
+		},
+		devStart(command?: string, port?: number): void {
+			this.previewError = "";
+			this.send({ type: "dev_start", command, port });
+		},
+		devStop(): void {
+			this.send({ type: "dev_stop" });
+		},
+
+		/**
+		 * Address bar → same-origin proxy path. Only the configured loopback dev server and
+		 * read-only file paths are reachable; everything else is refused with the reason.
+		 */
+		navigate(input: string): string | null {
+			const value = input.trim();
+			if (!value) return null;
+			const refuse = (why: string): null => {
+				this.previewError = why;
+				return null;
+			};
+			if (value.startsWith("/__proxy/") || value.startsWith("/__file/")) {
+				this.previewError = "";
+				this.previewUrl = value;
+				return value;
+			}
+			if (value.startsWith("file://")) {
+				const path = decodeURIComponent(value.slice("file://".length));
+				if (!path.startsWith("/")) return refuse("refused: file:// needs an absolute path");
+				this.previewError = "";
+				this.previewUrl = `/__file/?path=${encodeURIComponent(path)}`;
+				return this.previewUrl;
+			}
+			const status = this.previewInfo?.status;
+			if (value.startsWith("/")) {
+				this.previewError = "";
+				this.previewUrl = `/__proxy${value}`;
+				return this.previewUrl;
+			}
+			let url: URL | null = null;
+			try {
+				url = new URL(value);
+			} catch {
+				url = null;
+			}
+			if (!url || !url.hostname) return refuse(`refused: "${value}" is not a URL`);
+			const loopback = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+			if (!loopback.has(url.hostname)) {
+				return refuse(`refused: ${url.hostname} is not a loopback upstream (only the local dev server is proxied)`);
+			}
+			if (status?.port && url.port && url.port !== String(status.port)) {
+				return refuse(`refused: port ${url.port} is not the dev server port ${status.port}`);
+			}
+			this.previewError = "";
+			this.previewUrl = `/__proxy${url.pathname}${url.search}${url.hash}`;
+			return this.previewUrl;
+		},
+
+		reloadPreview(): void {
+			this.previewFrameKey++;
+		},
+
+		setPickMode(on: boolean): void {
+			this.pickMode = on;
+		},
+
+		removePick(id: string): void {
+			this.picks = this.picks.filter((pick) => pick.id !== id);
+		},
+
+		clearPicks(): void {
+			this.picks = [];
+		},
+
+		setPickNote(id: string, note: string): void {
+			this.picks = this.picks.map((pick) => (pick.id === id ? { ...pick, note } : pick));
+		},
+
+		/** Structured facts about one picked element — facts only, no instructions. */
+		pickFacts(pick: PickRecord): string {
+			const p = pick.payload;
+			return [
+				`[page] ${p.url}${p.title ? ` — ${p.title}` : ""}`,
+				`[element] <${p.tag}>${p.role ? ` role=${p.role}` : ""}${p.id ? ` #${p.id}` : ""} selector=${p.selector} (matches ${p.selectorMatches}, unique ${p.selectorUnique ? "yes" : "no"})`,
+				`[text] ${p.text || "(empty)"}`,
+				`[rect] x=${p.rect.x} y=${p.rect.y} w=${p.rect.w} h=${p.rect.h}`,
+				`[html] ${p.html}`,
+				pick.note ? `[note] ${pick.note}` : "",
+			]
+				.filter(Boolean)
+				.join("\n");
+		},
+
+		insertIntoPrompt(text: string): void {
+			this.composerDraft = text;
+			this.composerSeq++;
+		},
+
 		answerSelect(id: string, value: string | undefined): void {
 			if (value === undefined) this.send({ type: "ui_response", id, cancelled: true });
 			else this.send({ type: "ui_response", id, value });

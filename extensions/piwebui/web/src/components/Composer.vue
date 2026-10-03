@@ -7,15 +7,24 @@
  * run is active, so the toggle is disabled when idle rather than queueing a message
  * that nobody is waiting for.
  */
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { Button, Space, Switch, Textarea, Tooltip } from "@pixelium/web-vue";
 
-const props = defineProps<{ running: boolean; queueSteering: number; queueFollowUp: number }>();
+const props = defineProps<{ running: boolean; queueSteering: number; queueFollowUp: number; draft: string; draftSeq: number }>();
 const emit = defineEmits<{ (event: "prompt", text: string): void; (event: "steer", text: string): void; (event: "abort"): void }>();
 
 const text = ref("");
 const steerMode = ref(false);
 const effectiveSteer = computed(() => steerMode.value && props.running);
+
+// The preview panel drops picked-element facts here; it never sends them on its own.
+watch(
+	() => props.draftSeq,
+	() => {
+		if (!props.draft) return;
+		text.value = text.value.trim() ? `${text.value.trim()}\n\n${props.draft}` : props.draft;
+	},
+);
 
 function submit(): void {
 	const value = text.value.trim();

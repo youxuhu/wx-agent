@@ -102,3 +102,48 @@ export function messageToText(message: unknown): string {
 		.map((block) => block.text)
 		.join("\n");
 }
+
+/** Preview side (same-origin proxy + dev server + element picking). */
+export interface DevServerStatus {
+	state: "stopped" | "starting" | "ready" | "failed" | "exited";
+	command: string | null;
+	port: number | null;
+	pid: number | null;
+	startedAt: number | null;
+	readyAt: number | null;
+	readyVia: string | null;
+	httpStatus: number | null;
+	error: string | null;
+	log: string[];
+	cwd: string;
+}
+
+export interface PreviewInfo {
+	status: DevServerStatus;
+	project: { command: string | null; port: number | null; readyPattern: string | null; configured: boolean };
+	proxyPrefix: string;
+	filePrefix: string;
+}
+
+/** What the injected picker reports about the element the user clicked. */
+export interface PickPayload {
+	url: string;
+	title: string;
+	tag: string;
+	role: string | null;
+	id: string | null;
+	classes: string | null;
+	text: string;
+	rect: { x: number; y: number; w: number; h: number };
+	selector: string;
+	selectorMatches: number;
+	selectorUnique: boolean;
+	html: string;
+}
+
+export interface PickRecord {
+	id: string;
+	at: string;
+	note: string;
+	payload: PickPayload;
+}

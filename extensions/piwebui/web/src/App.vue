@@ -9,11 +9,15 @@ import MessageList from "./components/MessageList.vue";
 import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
 import SessionDrawer from "./components/SessionDrawer.vue";
+import PreviewPanel from "./components/PreviewPanel.vue";
 import { useSessionStore } from "./stores/session.ts";
 
 const store = useSessionStore();
 
-onMounted(() => store.connect());
+onMounted(() => {
+	store.connect();
+	store.listenForPicks();
+});
 </script>
 
 <template>
@@ -27,12 +31,14 @@ onMounted(() => store.connect());
 			<Space class="head-right">
 				<Badge v-if="store.pendingUi.length" theme="danger">{{ store.pendingUi.length }} approval{{ store.pendingUi.length > 1 ? "s" : "" }}</Badge>
 				<Tag v-if="store.sessionName" theme="notice">{{ store.sessionName }}</Tag>
+				<Button size="small" :variant="store.showPreview ? 'primary' : 'text'" @click="store.showPreview = !store.showPreview">preview</Button>
 				<Button size="small" variant="text" @click="store.showSessions = true">sessions</Button>
 			</Space>
 		</header>
 
-		<main class="main">
-			<MessageList :messages="store.messages" :tools="store.tools" />
+		<main class="main" :class="{ split: store.showPreview }">
+			<MessageList class="pane" :messages="store.messages" :tools="store.tools" />
+			<PreviewPanel v-if="store.showPreview" class="pane" />
 		</main>
 
 		<footer v-if="store.retry" class="err">
@@ -49,6 +55,8 @@ onMounted(() => store.connect());
 			:running="store.running"
 			:queue-steering="store.queueSteering"
 			:queue-follow-up="store.queueFollowUp"
+			:draft="store.composerDraft"
+			:draft-seq="store.composerSeq"
 			@prompt="store.sendPrompt($event)"
 			@steer="store.steer($event)"
 			@abort="store.abort()"
@@ -91,6 +99,19 @@ onMounted(() => store.connect());
 	flex: 1;
 	overflow: auto;
 	min-height: 0;
+}
+
+.main.split {
+	display: grid;
+	grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr);
+	gap: 10px;
+	overflow: hidden;
+}
+
+.pane {
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
 }
 
 .err {
