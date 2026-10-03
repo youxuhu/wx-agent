@@ -47,17 +47,23 @@ function markdownTable(rows: string[][], maxRows: number): { table: string; tota
 }
 
 export default function readXlsx(pi: ExtensionAPI) {
+	const XLSX_MANUAL =
+		"Convert an Excel sheet to a markdown table (SheetJS).\n" +
+		"- path: absolute, ~/... or relative to cwd; extensions .xlsx/.xlsm/.xls enforced.\n" +
+		`- sheet: sheet name (default first sheet). maxRows: data rows per call (default ${DEFAULT_MAX_ROWS}, hard cap ${HARD_MAX_ROWS}); repeat with larger values or read specific sheets for wide workbooks.\n` +
+		"- Returns the sheet list, the table (row-capped) and total row/col counts.\n" +
+		"- The built-in read tool cannot read Excel; it defers here automatically when an Excel path is read directly.";
+
 	pi.registerTool({
 		name: "read_xlsx",
 		label: "Read Excel",
-		promptSnippet: "read_xlsx — convert Excel sheets (.xlsx/.xls) to markdown tables",
+		promptSnippet: "read_xlsx — read Excel files (built-in read can't)",
 		promptGuidelines: [
-			"Use read_xlsx for ANY .xlsx/.xlsm/.xls file the user asks to read, review, or analyze — the built-in read tool cannot read Excel files.",
+			"Use read_xlsx for ANY .xlsx/.xlsm/.xls file — the built-in read tool cannot read Excel.",
 		],
-		description:
-			"Read an Excel file by converting a sheet to a markdown table. " +
-			"Use for ANY .xlsx/.xlsm/.xls the user asks to read — the built-in read tool cannot handle Excel. " +
-			"Returns the sheet list, the table (row-capped) and total row/col counts.",
+		description: "Convert an Excel sheet to a markdown table. Use for any spreadsheet the user asks to read.",
+		namespace: { name: "xlsx", description: "Excel reading", instructions: XLSX_MANUAL },
+		annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 		parameters: Type.Object({
 			path: Type.String({ description: "Path to the Excel file (absolute, ~/..., or relative to cwd)" }),
 			sheet: Type.Optional(Type.String({ description: "Sheet name; default is the first sheet" })),

@@ -1,19 +1,18 @@
 /**
- * tool-awareness — make extension-registered tools visible to the model.
+ * tool-awareness — make extension-registered tools discoverable to the model.
  *
- * pi only lists tools with a promptSnippet in the system prompt's "Available
- * tools" section; tools without one (or tools the model tends to overlook)
- * stay invisible to weaker models. This extension appends a compact list of
- * every extension-registered, currently-active tool to the system prompt each
- * run, so newly added plugins are automatically discoverable.
+ * v2 (progressive disclosure): the system prompt gets only a ONE-LINE INDEX
+ * (name + 8-word hint). Long usage docs live in each tool's namespace
+ * instructions, readable by codemode scripts via describeNamespace(), or by
+ * the model via action:"help"-style affordances — never dumped here.
  *
- * Runs chained after plan-switch's role injection (which prepends role
- * instructions); plan and build roles both get the list.
+ * Runs chained after plan-switch's role injection; plan and build roles both
+ * get the index.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const MAX_DESC_LENGTH = 110;
+const MAX_DESC_LENGTH = 60;
 
 export default function toolAwareness(pi: ExtensionAPI) {
 	pi.on("before_agent_start", (event) => {
@@ -34,8 +33,9 @@ export default function toolAwareness(pi: ExtensionAPI) {
 		return {
 			systemPrompt:
 				event.systemPrompt +
-				"\n\n## EXTENSION TOOLS (registered by local plugins — prefer them when relevant)\n" +
-				lines.join("\n"),
+				"\n\n## EXTENSION TOOLS (index only — details on demand)\n" +
+				lines.join("\n") +
+				"\nDetails: tool_search / describeTool(name) (codemode) · computer action:\"help\" · read_pdf/read_xlsx accept the same paths as read.",
 		};
 	});
 }

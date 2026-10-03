@@ -131,17 +131,23 @@ function renderPages(pdfPath: string, outDir: string, firstPage: number, maxPage
 }
 
 export default function readPdf(pi: ExtensionAPI) {
+	const PDF_MANUAL =
+		"Render PDF pages to PNG images for multimodal reading (macOS: PDFKit via swift; Linux: poppler).\n" +
+		"- path: absolute, ~/... or relative to cwd. Non-existent files error; .pdf extension enforced.\n" +
+		`- firstPage: 1-based start (default 1). maxPages: pages per call (default ${DEFAULT_MAX_PAGES}, hard cap ${HARD_MAX_PAGES}); window through long documents with repeated calls.\n` +
+		"- Returns one image block per page plus total page count. Page mtime is cached; unchanged files re-render faster.\n" +
+		"- The built-in read tool cannot read PDFs; it defers here automatically when a .pdf path is read directly.";
+
 	pi.registerTool({
 		name: "read_pdf",
 		label: "Read PDF",
-		promptSnippet: "read_pdf — render PDF pages as images for multimodal reading",
+		promptSnippet: "read_pdf — read PDFs (built-in read can't)",
 		promptGuidelines: [
-			"Use read_pdf for ANY .pdf file the user asks to read, review, or analyze — the built-in read tool cannot read PDFs.",
+			"Use read_pdf for ANY .pdf file — the built-in read tool cannot read PDFs.",
 		],
-		description:
-			"Read a PDF file by rendering its pages to images for a multimodal model. " +
-			"Use this for ANY .pdf file the user asks to read, review, or analyze — the built-in read tool cannot handle PDFs. " +
-			"Returns page images plus the total page count; use firstPage/maxPages to window through long documents.",
+		description: "Render PDF pages to images for multimodal reading. Use for any .pdf the user asks to read.",
+		namespace: { name: "pdf", description: "PDF reading", instructions: PDF_MANUAL },
+		annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
 		parameters: Type.Object({
 			path: Type.String({ description: "Path to the .pdf file (absolute, ~/..., or relative to cwd)" }),
 			firstPage: Type.Optional(Type.Number({ description: "1-based first page to render (default 1)" })),
