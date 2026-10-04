@@ -7,6 +7,7 @@
  */
 import { realpath } from "node:fs/promises";
 import { stat } from "node:fs/promises";
+import { PtySession } from "./pty.ts";
 import { PiRpcChild, type RpcRecord, type UiRequest } from "./rpc.ts";
 import { DevServer, loadPreviewConfig, resolveProject, type PreviewProject } from "./preview.ts";
 
@@ -21,6 +22,9 @@ export interface WorkspaceHooks {
 	stderr: (chunk: string) => void;
 	malformed: (line: string) => void;
 	preview: () => void;
+	/** Terminal output for this workspace (streamed to every attached client). */
+	ptyData: (data: string) => void;
+	ptyExit: (exitCode: number, signal?: number) => void;
 }
 
 export interface WorkspaceInfo {
@@ -37,6 +41,8 @@ export interface WorkspaceInfo {
 
 export class Workspace {
 	readonly cwd: string;
+	/** A real terminal for this workspace (see server/pty.ts). Owned here so it survives UIs. */
+	readonly pty: PtySession;
 	readonly child: PiRpcChild;
 	readonly devServer: DevServer;
 	readonly pendingUi = new Map<string, UiRequest>();
@@ -52,6 +58,10 @@ export class Workspace {
 		this.cwd = cwd;
 		this.previewRoot = cwd;
 		this.child = new PiRpcChild({ cwd, piBin: options.piBin, piNode: options.piNode, piScript: options.piScript, args: options.piArgs });
+		this.pty = new PtySession(cwd, {
+			data: (data) => options.hooks.ptyData(data),
+			exit: (exitCode, signal) => options.hooks.ptyExit(exitCode, signal),
+		});
 		this.devServer = new DevServer(cwd, {
 			onStatus: () => options.hooks.preview(),
 			onLog: () => undefined,
@@ -167,6 +177,7 @@ export class Workspace {
 	dispose(): void {
 		this.devServer.dispose();
 		this.child.stop();
+		this.pty.dispose();
 	}
 }
 

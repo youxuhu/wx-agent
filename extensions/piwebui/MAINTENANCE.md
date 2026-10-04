@@ -97,6 +97,7 @@ npm run desktop:build    # 出 .app + .dmg
 | `probe/disconnect-probe.ts` | :7801 + 测试 agentDir | 审批断线：仍挂起、不自动放行、无副作用、重连仍收到、拒绝后没执行 | 7/7 |
 | `probe/markdown-probe.ts` | 无（离线） | 渲染各构件 + `<script>`/`<img onerror>`/`javascript:` 三种注入被中和 | 13/13 |
 | `probe/health-probe.ts` | 无（离线） | 健康指示 9 种状态映射与优先级 | 9/9 |
+| `probe/pty-probe.ts` | 无（自己起服务，端口 0） | 终端：真 PTY（`TERM` 可见）、**`cd` 真的持久**、`export` 持久、`clear` 发出清屏序列、resize 不坏、重连回放、非 active workspace 拒绝输入、kill 报告退出码 | 13/13 |
 | `probe/session-delete-probe.ts` | 无（离线 + 自己起服务，端口 0） | 会话删除：目录内 `.jsonl` 才可删、目录外/非 session/穿越路径被拒、**当前打开的会话被拒**、协议必须带 `confirmed: true`、删除后列表刷新 | 11/11 |
 | `probe/tool-probe.ts` | 无（离线，含真实 `get_messages` 抓包） | 工具卡输入输出：从 assistant 的 `toolCall.arguments` 取输入、从 `role:"toolResult"` 消息取输出、`isError`→`error`、无结果的中断调用保持 `unknown`、图片结果降级为 `[image]`、历史不编造耗时 | 12/12 |
 | `probe/path-probe.ts` | 无（离线） | 顶栏路径显示：短路径原样、长路径保留根与末两段并带 `…`、空目录返回空串（由调用方给提示） | 8/8 |
@@ -156,6 +157,14 @@ npm run desktop:build    # 出 .app + .dmg
 - 状态语义：`done` / `error` 来自真实结果；**没有结果的调用（中断、页面刷新前发生）必须显示 `unknown`**，不能假装还在跑。
 - 长输入/输出：保留尾部 20000 字符并**明确写出丢了多少**（不静默截断）。
 
+## 6.11 终端是**真 PTY**（血泪教训）
+
+- 曾经把 Shell 做成"把命令丢给 pi 的 `bash`"：pi 的 bash **无状态**（每条命令一个新 shell、固定工作目录），所以 **`cd` 永远不生效**、**`clear` 只是个命令**（非 TTY 下 `TERM environment variable not set`，什么也不做）。用户一眼就看出来了。
+- 现在：`server/pty.ts` 每 workspace 一个 node-pty 长驻 shell（`$SHELL -l`，`TERM=xterm-256color`），前端 xterm.js 渲染。`cd`/`export`/别名/颜色/`clear`/全屏程序全部原生可用；会话跨抽屉关闭存活（服务端持有），重连时回放最近 256KB 并**标明丢弃量**。
+- **代价必须说清**：终端输出**不进模型上下文**（它不是 pi 的 bash 结果）。UI 提供 *Insert screen into prompt* 让用户显式把屏幕内容交给模型，而不是假装它在上下文里。
+- 打包：node-pty 是**原生模块**，esbuild 必须 `--external:node-pty`，包要随 resources 分发，并 **`chmod +x prebuilds/darwin-<arch>/spawn-helper`**（npm 安装后常丢可执行位 → `posix_spawnp failed`）；只保留本平台 prebuild（整包 62MB → 6.2MB）。`desktop:verify` 会用**打包的 node**真的 spawn 一个 pty，证明确实可加载。
+- 客户端：`pty_data` 分片必须**入队再排空**（同一 tick 多个 chunk 覆盖同一个 ref 会让 watcher 只看到最后一个 → 快速输出丢数据）。
+
 ## 6.10 Shell 抽屉与会话删除
 
 - Shell 是独立抽屉（`ShellPanel.vue`，在 Git 右侧），**不是一个表单**：有 scrollback（每条命令回显 + 自己的输出 + 该次的事实）、底部输入、↑/↓ 历史、Esc 停止。它仍然走 pi 的 `bash` 命令，所以单写者规则与 `exclude from context` 语义不变。
@@ -169,6 +178,8 @@ npm run desktop:build    # 出 .app + .dmg
 | 页面 `not found: / (the UI is not built yet)` | `dist/` 不存在或路径不对：先 `npm run build`；桌面版看 `--web-dir` 是否指向 `Resources/dist` |
 | 顶栏 `service closed` / `connecting…` | 服务没起或被 kill；浏览器会 1/2/4/8/15s 退避重连（**不重放任何消息**） |
 | 顶栏 `pi exited (1)` | pi 子进程崩了：看服务日志 stderr 原文；常见是模型/凭据问题 |
+| 终端里 `cd` 不生效 / `clear` 无效 | 说明又走回了 pi 的 `bash`（无状态）：见 §6.11，Shell 抽屉必须是 PTY |
+| 终端起不来（`posix_spawnp failed`） | node-pty 的 `spawn-helper` 丢了可执行位；打包脚本已处理，手装时要 `chmod +x` |
 | 工具卡展开是空的 / 只有 `unknown` | 见 §6.9：检查历史解析（`toolCall.arguments` + `toolResult`）与实时提取是否都在 |
 | 首次启动就进了某个目录（比如家目录） | 说明 `piwebui-workspaces.json` 里记着上次的目录；把该文件移开即回到"让你自己选"的行为 |
 | 消息只剩 `You` / `pi` 没有内容 | 块字段名写错（应为 `kind`）；`npm run typecheck`（vue-tsc）会报，`probe/message-probe.ts` 覆盖 |

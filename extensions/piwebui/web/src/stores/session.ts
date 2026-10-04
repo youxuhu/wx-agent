@@ -29,7 +29,6 @@ import {
 	type PickRecord,
 	type PreviewInfo,
 	type SessionSummary,
-	type ShellEntry,
 	type ToolRun,
 	type UiRequest,
 } from "../types.ts";
@@ -109,13 +108,17 @@ export const useSessionStore = defineStore("session", {
 		configName: "" as string,
 		configDraft: "" as string,
 		configStatus: "" as string,
-		shellCommand: "" as string,
-		shellRunning: false,
-		shellExcluded: true,
-		/** Scrollback: one entry per command, each with its own facts (a terminal keeps history). */
-		shellEntries: [] as ShellEntry[],
-		shellHistory: [] as string[],
-		shellHistoryIndex: null as number | null,
+		/**
+		 * Terminal (PTY) output is queued, not overwritten: several chunks can arrive in one tick,
+		 * and a watcher on a single string would drop all but the last one (a real data-loss bug for
+		 * fast output like `ls -R` or a build log). The panel drains this queue.
+		 */
+		ptyQueue: [] as string[],
+		/** Bumped on every chunk so the panel's watcher fires without watching the queue deeply. */
+		ptyOutputSeq: 0,
+		ptyRunning: false,
+		ptyShell: "",
+		ptyState: null as null | { replay: string; droppedChars: number; cols: number; rows: number },
 		authProviders: [] as Array<{ provider: string; kind: string; hasSecret: boolean; expires?: number }>,
 		authNote: "",
 		authStatus: "",
@@ -260,6 +263,28 @@ export const useSessionStore = defineStore("session", {
 						this.hydratedFor = null;
 						this.hydrate();
 					}
+					return;
+				}
+				case "pty_data": {
+					// Streamed as-is; xterm interprets the escape sequences (that is the point).
+					this.ptyQueue.push(String(payload.data ?? ""));
+					this.ptyOutputSeq += 1;
+					return;
+				}
+				case "pty_state": {
+					this.ptyRunning = payload.running === true;
+					this.ptyShell = String(payload.shell ?? "");
+					this.ptyState = {
+						replay: String(payload.replay ?? ""),
+						droppedChars: Number(payload.droppedChars ?? 0),
+						cols: Number(payload.cols ?? 100),
+						rows: Number(payload.rows ?? 30),
+					};
+					return;
+				}
+				case "pty_exit": {
+					this.ptyRunning = false;
+					this.notice = `terminal exited (code ${String(payload.exitCode ?? "?")}${payload.signal ? `, signal ${String(payload.signal)}` : ""})`;
 					return;
 				}
 				case "session_deleted": {
@@ -443,13 +468,6 @@ export const useSessionStore = defineStore("session", {
 					this.retry = null;
 					if (record.success === false) this.setError(`retries exhausted: ${String(record.finalError ?? "")}`);
 					return;
-				case "bash_execution_update": {
-					const delta = String(record.delta ?? "");
-					if (!delta) return;
-					const entry = this.shellEntries[this.shellEntries.length - 1];
-					if (entry) this.appendShell(entry, delta);
-					return;
-				}
 				case "session_info_changed":
 					this.send({ type: "get_state" });
 					return;
@@ -578,22 +596,6 @@ export const useSessionStore = defineStore("session", {
 				}
 				case "export_html": {
 					this.configStatus = `export_html: ${JSON.stringify(data)}`;
-					return;
-				}
-				case "bash": {
-					this.shellRunning = false;
-					const entry = this.shellEntries[this.shellEntries.length - 1];
-					if (entry) {
-						entry.running = false;
-						entry.endedAt = Date.now();
-						entry.exitCode = typeof data.exitCode === "number" ? data.exitCode : null;
-						entry.cancelled = data.cancelled === true;
-						// The response may be truncated; the deltas already streamed in. Record the facts
-						// instead of silently showing less than what pi produced.
-						entry.truncatedByPi = data.truncated === true;
-						entry.fullOutputPath = typeof data.fullOutputPath === "string" ? data.fullOutputPath : "";
-						if (data.output && !entry.output) this.appendShell(entry, String(data.output));
-					}
 					return;
 				}
 				case "clone":
@@ -1308,57 +1310,32 @@ export const useSessionStore = defineStore("session", {
 			this.insertIntoPrompt(`/${name} `);
 			this.showControl = false;
 		},
-		/** Append to a scrollback entry, keeping the buffer bounded but stating what was dropped. */
-		appendShell(entry: ShellEntry, text: string): void {
-			const LIMIT = 200_000;
-			const combined = entry.output + text;
-			if (combined.length > LIMIT) {
-				entry.droppedChars += combined.length - LIMIT;
-				entry.output = combined.slice(-LIMIT);
-			} else {
-				entry.output = combined;
-			}
+		// ---- terminal (PTY) ----
+		/** Take everything the terminal produced since the last call (never drops a chunk). */
+		drainPty(): string[] {
+			if (!this.ptyQueue.length) return [];
+			const chunks = this.ptyQueue;
+			this.ptyQueue = [];
+			return chunks;
 		},
 
-		runBash(): void {
-			const command = this.shellCommand.trim();
-			if (!command) return;
-			this.shellHistory = [command, ...this.shellHistory.filter((item) => item !== command)].slice(0, 50);
-			this.shellHistoryIndex = null;
-			this.shellEntries.push({
-				id: `sh-${Date.now()}`,
-				command,
-				output: "",
-				droppedChars: 0,
-				exitCode: null,
-				running: true,
-				cancelled: false,
-				truncatedByPi: false,
-				fullOutputPath: "",
-				startedAt: Date.now(),
-			});
-			this.shellRunning = true;
-			this.shellCommand = "";
-			this.send({ type: "bash", command, excludeFromContext: this.shellExcluded });
+		/** Ask the service for this workspace's terminal; it replies with the current state. */
+		startPty(cols: number, rows: number): void {
+			if (!this.cwd) return;
+			this.send({ type: "pty_start", cols, rows });
+		},
+		writePty(data: string): void {
+			if (!data) return;
+			this.send({ type: "pty_input", data });
+		},
+		resizePty(cols: number, rows: number): void {
+			if (!this.cwd) return;
+			this.send({ type: "pty_resize", cols, rows });
+		},
+		killPty(): void {
+			this.send({ type: "pty_kill" });
 		},
 
-		clearShell(): void {
-			this.shellEntries = [];
-		},
-
-		/** ↑ / ↓ walk the command history like a shell does. */
-		recallShell(direction: "older" | "newer"): void {
-			if (!this.shellHistory.length) return;
-			const current = this.shellHistoryIndex;
-			const next = direction === "older"
-				? (current === null ? 0 : Math.min(current + 1, this.shellHistory.length - 1))
-				: (current === null ? null : current - 1);
-			this.shellHistoryIndex = next === -1 ? null : next;
-			this.shellCommand = this.shellHistoryIndex === null ? "" : (this.shellHistory[this.shellHistoryIndex] ?? "");
-		},
-		abortBash(): void {
-			this.send({ type: "abort_bash" });
-		},
 		loadConfigFiles(): void {
 			void fetch("/api/config")
 				.then((response) => response.json() as Promise<{ files: ConfigFile[] }>)

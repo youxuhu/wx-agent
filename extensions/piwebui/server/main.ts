@@ -578,6 +578,8 @@ function main(): void {
 				broadcast({ type: "ui_resolved", id, response, reason }, workspaceByCwd(key)),
 			state: (info: unknown): void => broadcast({ type: "pi_state", ...(info as object) }, workspaceByCwd(key)),
 			stderr: (chunk: string): void => broadcast({ type: "pi_stderr", chunk: chunk.slice(-2000) }, workspaceByCwd(key)),
+			ptyData: (data: string): void => broadcast({ type: "pty_data", workspace: key, data }, workspaceByCwd(key)),
+			ptyExit: (exitCode: number, signal?: number): void => broadcast({ type: "pty_exit", workspace: key, exitCode, signal }, workspaceByCwd(key)),
 			malformed: (line: string): void => broadcast({ type: "malformed", line: line.slice(0, 500) }, workspaceByCwd(key)),
 			preview: (): void => {
 				const workspace = workspaceByCwd(key);
@@ -843,6 +845,38 @@ function main(): void {
 					}
 					workspace.child.command("switch_session", { sessionPath: path });
 				});
+				return;
+			}
+			case "pty_start": {
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				const cols = Number(message.cols ?? 100);
+				const rows = Number(message.rows ?? 30);
+				const state = workspace.pty.start(Number.isFinite(cols) ? cols : 100, Number.isFinite(rows) ? rows : 30);
+				socket.send(JSON.stringify({ type: "pty_state", workspace: workspace.cwd, ...state }));
+				return;
+			}
+			case "pty_input": {
+				// Typing into the terminal is a write: only the active workspace accepts it.
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				const data = String(message.data ?? "");
+				if (!data) return;
+				if (!workspace.pty.write(data)) {
+					socket.send(JSON.stringify({ type: "error", message: "no terminal is running in this workspace" }));
+				}
+				return;
+			}
+			case "pty_resize": {
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				workspace.pty.resize(Number(message.cols ?? 100), Number(message.rows ?? 30));
+				return;
+			}
+			case "pty_kill": {
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				workspace.pty.kill();
 				return;
 			}
 			case "delete_session": {

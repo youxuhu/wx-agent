@@ -8,7 +8,7 @@
  */
 import { execFile } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { chmod, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
@@ -65,8 +65,9 @@ async function prepareResources() {
 		}
 	}
 	void esbuild;
-	// `ws` is CommonJS and uses dynamic requires, which an ESM bundle cannot wrap: keep it
-	// external and ship the package next to the bundle (Node resolves it from there).
+	// Two packages stay outside the bundle and are shipped next to it (Node resolves them from
+	// there): `ws` is CommonJS with dynamic requires, and `node-pty` is a native addon that cannot
+	// be bundled at all.
 	await run(esbuildBin, [
 		"server/main.ts",
 		"--bundle",
@@ -74,10 +75,22 @@ async function prepareResources() {
 		"--platform=node",
 		"--target=node22",
 		"--external:ws",
+		"--external:node-pty",
 		`--outfile=${join(resources, "server.mjs")}`,
 	]);
 	await mkdir(join(resources, "node_modules"), { recursive: true });
 	await cp(join(root, "node_modules", "ws"), join(resources, "node_modules", "ws"), { recursive: true });
+	// The terminal needs the native addon; only this platform's prebuild is shipped (the package
+	// carries prebuilds for every platform, which is ~60 MB of dead weight otherwise).
+	await cp(join(root, "node_modules", "node-pty"), join(resources, "node_modules", "node-pty"), { recursive: true });
+	const prebuilds = join(resources, "node_modules", "node-pty", "prebuilds");
+	for (const entry of await readdir(prebuilds)) {
+		if (entry !== `darwin-${process.arch}`) await rm(join(prebuilds, entry), { recursive: true, force: true });
+	}
+	for (const entry of ["spawn-helper", "pty.node"]) {
+		const file = join(resources, "node_modules", "node-pty", "prebuilds", `darwin-${process.arch}`, entry);
+		if (await exists(file)) await chmod(file, 0o755);
+	}
 
 	// 3. pi runtime subset
 	const pi = join(resources, "pi");

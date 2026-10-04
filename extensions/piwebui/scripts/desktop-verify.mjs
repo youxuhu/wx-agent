@@ -46,5 +46,13 @@ const extensionErrors = errors.join("\n").match(/Failed to load extension[^\n]*/
 console.log(`port ${port} · workspaces ${health.workspaces?.length} · state ${health.workspaces?.[0]?.state}`);
 if (extensionErrors.length) console.log(`FAIL  ${extensionErrors.length} extension(s) failed to load:\n  ${extensionErrors.slice(0, 3).join("\n  ")}`);
 else console.log("PASS  extensions loaded from the curated runtime");
+
+// The terminal is a native addon: prove it loads *and spawns* under the bundled node, which is the
+// part a plain `npm install` on the build machine does not prove.
+spawn(node, ["-e", `const pty=require(${JSON.stringify(join(resources, "node_modules/node-pty"))});const t=pty.spawn("/bin/sh",["-c","echo pty-verify-ok"],{name:"xterm-256color",cols:80,rows:24,cwd:process.cwd()});let out="";t.onData((d)=>{out+=d});setTimeout(()=>{const ok=out.includes("pty-verify-ok");console.log(ok?"PTY-OK":"PTY-FAIL:"+JSON.stringify(out));process.exit(ok?0:1)},2500);`], {
+	stdio: "inherit",
+}).on("exit", (code) => {
+	if (code !== 0) console.error("FAIL  the bundled node cannot spawn a pty");
+});
 child.kill();
 process.exit(extensionErrors.length ? 1 : 0);
