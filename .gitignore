@@ -17,6 +17,8 @@ trust.json
 package.json
 package-lock.json
 pi-subagents/
+# the desktop/ui remembers the last folder here (machine state, not config)
+piwebui-workspaces.json
 # extension scratch state only — extension sources stay tracked
 extensions/runs/
 extensions/*/node_modules/
