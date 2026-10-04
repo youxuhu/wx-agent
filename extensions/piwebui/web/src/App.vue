@@ -115,19 +115,33 @@ const GIT_TABS = [
 	{ key: "branches", label: "Branches" },
 ] as const;
 
+/** Open a drawer (and load what it shows). The click path and deep links share this. */
+function openDrawer(key: "files" | "git" | "shell" | "preview" | "settings"): void {
+	store.drawer = key;
+	if (key === "preview") store.showPreview = true;
+	if (key === "files") store.loadTree(store.cwd);
+	if (key === "git") store.refreshGit();
+	if (key === "settings") store.setSettingsTab(store.settingsTab);
+}
+
 function toggleDrawer(key: string): void {
 	if (key === "preview") {
 		store.showPreview = store.drawer === "preview" ? false : true;
 		store.drawer = store.drawer === "preview" ? "none" : "preview";
 		return;
 	}
-	store.drawer = store.drawer === key ? "none" : (key as typeof store.drawer);
-	if (store.drawer === "files") store.loadTree(store.cwd);
-	if (store.drawer === "git") store.refreshGit();
-	if (store.drawer === "settings") store.setSettingsTab(store.settingsTab);
+	if (store.drawer === key) {
+		store.drawer = "none";
+		return;
+	}
+	openDrawer(key as "files" | "git" | "shell" | "settings");
 }
 
-/** Deep links: `?dir=` opens a workspace, `?file=` shows one file in the files drawer. */
+/**
+ * Deep links: `?dir=` opens a workspace, `?file=` shows one file in the files drawer, and
+ * `?drawer=files|git|shell|preview|settings` (with `?gitTab=` / `?settingsTab=`) opens a drawer —
+ * which also makes a layout state reachable from a URL instead of only by clicking.
+ */
 function applyDeepLink(): void {
 	const params = new URLSearchParams(location.search);
 	const dir = params.get("dir");
@@ -136,6 +150,16 @@ function applyDeepLink(): void {
 	if (file) {
 		store.drawer = "files";
 		store.openFileAt(file);
+	}
+	const drawer = params.get("drawer");
+	if (drawer === "files" || drawer === "git" || drawer === "shell" || drawer === "preview" || drawer === "settings") {
+		openDrawer(drawer);
+	}
+	const gitTab = params.get("gitTab");
+	if (gitTab === "changes" || gitTab === "history" || gitTab === "branches") store.setGitTab(gitTab);
+	const settingsTab = params.get("settingsTab");
+	if (settingsTab === "model" || settingsTab === "credentials" || settingsTab === "commands" || settingsTab === "session" || settingsTab === "config") {
+		store.setSettingsTab(settingsTab);
 	}
 }
 
@@ -199,7 +223,7 @@ onMounted(() => {
 						:class="{ active: session.path === store.currentSessionPath }"
 					>
 						<button class="side-open" @click="store.switchSession(session.path)">
-							<span class="side-title">{{ session.name || session.firstPrompt || session.id }}</span>
+							<span class="side-title" :title="session.name || session.firstPrompt || session.id">{{ session.name || session.firstPrompt || session.id }}</span>
 							<span class="tiny faint">{{ new Date(session.updatedAt).toLocaleString() }} · {{ session.messageCount }} msg</span>
 						</button>
 						<!-- Deleting a conversation is destructive: the first click asks, the second does it. -->

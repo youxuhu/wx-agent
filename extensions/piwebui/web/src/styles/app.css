@@ -104,6 +104,7 @@ textarea {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
+	max-width: 100%;
 	border: 1px solid var(--border-strong);
 	background: var(--bg);
 	border-radius: var(--radius-sm);
@@ -153,6 +154,9 @@ textarea {
 }
 
 .tab {
+	/* Never shrink: a shrunken tab clips its own label ("Settings" rendered as "Setting") while the
+	   row still looks like it fits. The topbar wraps instead. */
+	flex: 0 0 auto;
 	border: 1px solid transparent;
 	background: transparent;
 	border-radius: var(--radius-sm);
@@ -175,6 +179,10 @@ textarea {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
+	/* max-width, but NOT min-width: 0 — a chip that may shrink below its own text spills that text
+	   over its neighbour (the "current" chip overlapped the branch name). A chip shrinks through a
+	   child that can shrink, not by cutting into its own label. */
+	max-width: 100%;
 	border: 1px solid var(--border);
 	background: var(--bg-subtle);
 	border-radius: 999px;
@@ -188,6 +196,12 @@ textarea {
 	color: var(--ok);
 	border-color: #cfe8d5;
 	background: #f2fbf4;
+}
+
+/* In a list row the chip shares the line with a label and a value: without a cap a long ref (a branch
+   name, a range) takes the whole row and the label next to it shrinks to nothing. */
+.list-row .chip {
+	max-width: 50%;
 }
 
 .chip-warn {
@@ -305,6 +319,10 @@ h4 {
 	display: flex;
 	align-items: center;
 	gap: 10px;
+	/* Wraps instead of running off the edge: with a narrow window the drawer tabs are the last
+	   thing in this row, and without wrapping they simply leave the visible area. */
+	flex-wrap: wrap;
+	row-gap: 6px;
 	padding: 8px 12px;
 	border-bottom: 1px solid var(--border);
 	background: var(--bg);
@@ -365,6 +383,7 @@ h4 {
 }
 
 .side-title {
+	max-width: 100%;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -423,6 +442,9 @@ h4 {
 	display: flex;
 	align-items: center;
 	gap: 8px;
+	flex-wrap: wrap;
+	row-gap: 4px;
+	min-width: 0;
 	padding: 6px 10px;
 	background: var(--bg-subtle);
 	cursor: pointer;
@@ -585,6 +607,8 @@ h4 {
 	margin: 0;
 	font-size: var(--fs-sm);
 	color: var(--fg-muted);
+	/* Facts routinely contain paths and identifiers with no spaces to break at. */
+	overflow-wrap: anywhere;
 }
 
 /* Long output: one scroller, with the facts about what is shown above the text. */
@@ -686,11 +710,16 @@ input[type="checkbox"] {
 }
 
 .banner {
+	/* Same column as the thread, the composer and the status line: capped and inset. As a
+	   full-bleed strip its text touched the window edge and slid under an open drawer. */
+	width: min(740px, calc(100% - 40px));
+	margin: 0 auto 8px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
 	padding: 6px 10px;
 	font-size: var(--fs-sm);
 	background: var(--bg-subtle);
+	min-width: 0;
 }
 
 /* --- resizable right drawer --------------------------------------------- */
@@ -884,6 +913,14 @@ input[type="checkbox"] {
 	height: 100%;
 }
 
+/* A terminal never scrolls sideways: xterm's screen is exactly `cols` cells wide, and a fractional
+   cell leaves a stray horizontal scrollbar (a dark bar across the bottom of a light terminal). */
+.shell-term,
+.shell-term .xterm,
+.shell-term .xterm-viewport {
+	overflow-x: hidden;
+}
+
 .shell-foot {
 	border-top: 1px solid var(--line);
 	padding: 6px 10px;
@@ -903,7 +940,9 @@ input[type="checkbox"] {
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
-	align-items: flex-start;
+	/* NOT flex-start: that sizes children to their content, so a long session name grew past the
+	   sidebar and got clipped instead of being ellipsized. Stretch is what bounds them. */
+	align-items: stretch;
 	gap: 1px;
 	background: none;
 	border: 0;
@@ -933,4 +972,44 @@ input[type="checkbox"] {
 
 .side-del:hover {
 	color: var(--danger);
+}
+
+/* --- narrow windows --------------------------------------------------------
+   Below ~900px a 460px drawer next to a 260px sidebar cannot sit beside the conversation: the
+   conversation column collapses to zero width and the drawer hangs off the right edge. So at these
+   widths the sidebar and the drawer stop taking space in the row and overlay it instead — the
+   conversation keeps its full width when neither is open, and each is clamped to the viewport.
+   The window can be narrow on purpose (a Tauri window, a window snapped to one side). */
+@media (max-width: 900px) {
+	.body {
+		position: relative;
+	}
+
+	/* The sidebar still holds its column here (260 of 900+ is affordable); the drawer does not —
+	   a 460px drawer next to it would push the conversation to zero width and hang off the edge. */
+	.drawer {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		right: 0;
+		z-index: 3;
+		width: min(var(--drawer-w), 100%);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+	}
+
+	/* A drawer that covers the conversation must fill the width it covers, not squeeze it. */
+	.drawer-body,
+	.pane {
+		min-width: 0;
+	}
+}
+
+/* The sidebar keeps its column at every width — as an overlay it would cover the first words of every
+   line, which is worse than being narrow. It just gives up width here, and ☰ still collapses it
+   entirely for anyone who wants the conversation full-width. */
+@media (max-width: 640px) {
+	.sidebar {
+		width: 200px;
+		padding: 8px;
+	}
 }

@@ -84,6 +84,14 @@ watch(
 );
 
 watch(
+	() => store.ptyFreshSeq,
+	() => {
+		// A terminal with nothing to replay is a new one: the old screen must not linger behind it.
+		term?.reset();
+	},
+);
+
+watch(
 	() => store.cwd,
 	() => {
 		// A different workspace is a different terminal; the service keeps one per workspace.
@@ -154,15 +162,15 @@ function copyScreen(): void {
 			<span class="tiny faint mono ellipsis" :title="store.ptyShell">{{ store.ptyShell || "shell" }}</span>
 			<span class="tiny faint">{{ store.cwd || "(no folder)" }}</span>
 			<span class="spacer" />
-			<button class="btn btn-sm btn-ghost" :disabled="!store.ptyRunning" @click="store.killPty(); store.startPty(100, 30)">Restart</button>
 			<button class="btn btn-sm btn-ghost" @click="copyScreen()">Copy screen</button>
 			<button class="btn btn-sm btn-ghost" title="The terminal is not part of the model's context" @click="insertScreen()">Insert screen into prompt</button>
 		</div>
 		<div ref="host" class="shell-term" />
 		<div class="shell-foot tiny faint">
 			A real shell with a terminal of its own: <span class="mono">cd</span>, <span class="mono">export</span>, aliases, colors and
-			<span class="mono">clear</span> behave normally. It runs inside <span class="mono">{{ store.cwd || "the workspace" }}</span> and its output does
-			<strong>not</strong> reach the model — use <em>Insert screen into prompt</em> for that.
+			<span class="mono">clear</span> behave normally. It runs inside <span class="mono">{{ store.cwd || "the workspace" }}</span>, its output does
+			<strong>not</strong> reach the model — use <em>Insert screen into prompt</em> for that — and a shell that exits is replaced by a new one the
+			next time this drawer is opened.
 		</div>
 	</div>
 </template>

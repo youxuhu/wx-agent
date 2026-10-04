@@ -142,9 +142,48 @@ check(
 	String(refused?.message).slice(0, 60),
 );
 
+// The drawer's Restart button sends kill+start back to back. The killed shell exits *asynchronously*,
+// so its exit callback must not touch the terminal that replaced it: an unguarded callback detached
+// the new shell (typing stopped working) and, worse, threw inside the socket handler.
 send({ type: "pty_kill" });
-const exited = await waitFor(() => messages.find((message) => message.type === "pty_exit"));
-check("killing the terminal reports the exit", exited !== undefined, `exitCode=${String(exited?.exitCode)}`);
+send({ type: "pty_start", cols: 100, rows: 30 });
+await wait(1500);
+const afterRestart = messages.filter((message) => message.type === "pty_state").at(-1);
+check("restarting the terminal leaves a running terminal", afterRestart?.running === true, `running=${String(afterRestart?.running)}`);
+// The marker is *built by the shell*, so the typed text can never match it. That matters: zsh's line
+// editor redraws the prompt with "\r \r" and erases its own echo, so an assertion on "echo + output
+// = two occurrences" failed while the terminal was working perfectly well.
+const restartStarted = Date.now();
+type("echo restart-$((1 + 1))-marker\r");
+const restartedAfterMs = await waitFor(() => (plain().includes("restart-2-marker") ? Date.now() - restartStarted : undefined), 15_000);
+check("typing works after a restart", restartedAfterMs !== undefined, `${restartedAfterMs === undefined ? "never" : String(restartedAfterMs)}ms after the restart`);
+
+// Hammering it is the honest test: a stale callback can survive one restart and fail on the third.
+for (let round = 0; round < 3; round += 1) {
+	send({ type: "pty_kill" });
+	send({ type: "pty_start", cols: 100, rows: 30 });
+	await wait(700);
+}
+type("echo survived-$((40 + 2))-restarts\r");
+const survived = await waitFor(() => (plain().includes("survived-42-restarts") ? true : undefined), 15_000);
+check("the terminal still works after repeated restarts", Boolean(survived));
+
+// And the service itself must be alive: a throw in a socket handler used to take down the process.
+const alive = await fetch(`http://127.0.0.1:${port}/api/health`).then(() => true).catch(() => false);
+check("the service survives the restart sequence (a throw here used to kill it)", alive);
+
+// Asking for a kill is answered with state, not with an "it exited" notice nobody needs.
+send({ type: "pty_kill" });
+const killed = await waitFor(() => (messages.filter((message) => message.type === "pty_state").at(-1)?.running === false ? true : undefined), 6000);
+check("killing the terminal reports it as not running", Boolean(killed));
+
+// A shell that dies on its own is different: that one is an event the UI must tell the user about.
+send({ type: "pty_start", cols: 100, rows: 30 });
+await waitFor(() => (messages.filter((message) => message.type === "pty_state").at(-1)?.running === true ? true : undefined), 6000);
+await wait(500);
+type("exit\r");
+const exited = await waitFor(() => messages.find((message) => message.type === "pty_exit"), 8000);
+check("a shell that exits on its own is reported as an exit", exited !== undefined, `exitCode=${String(exited?.exitCode)}`);
 
 child.kill("SIGTERM");
 socket.close();

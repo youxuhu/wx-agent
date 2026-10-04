@@ -3,7 +3,7 @@
  * Composer: prompt, steer or abort. Steer is only meaningful during a run, so the control is
  * disabled while idle instead of queueing a message nobody consumes.
  */
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const props = defineProps<{
 	running: boolean;
@@ -22,6 +22,15 @@ const emit = defineEmits<{
 
 const text = ref("");
 const steerMode = ref(false);
+/**
+ * The key hint is part of the placeholder, so in a narrow window it wraps the placeholder onto
+ * three lines and the input box grows for no reason. The hint stays reachable as a tooltip.
+ */
+const narrow = window.matchMedia("(max-width: 640px)");
+const isNarrow = ref(narrow.matches);
+const onNarrowChange = (event: MediaQueryListEvent): void => {
+	isNarrow.value = event.matches;
+};
 const area = ref<HTMLTextAreaElement | null>(null);
 /**
  * The steer switch is always clickable. It only *changes delivery* while a run is active:
@@ -70,7 +79,14 @@ watch(
 	},
 );
 
-onMounted(grow);
+onMounted(() => {
+	narrow.addEventListener("change", onNarrowChange);
+	grow();
+});
+
+onBeforeUnmount(() => {
+	narrow.removeEventListener("change", onNarrowChange);
+});
 </script>
 
 <template>
@@ -81,7 +97,8 @@ onMounted(grow);
 					ref="area"
 					v-model="text"
 					rows="1"
-					placeholder="Ask pi to do something…  (Enter to send, Shift+Enter for newline)"
+					:placeholder="isNarrow ? 'Ask pi to do something…' : 'Ask pi to do something…  (Enter to send, Shift+Enter for newline)'"
+					:title="'Enter to send, Shift+Enter for newline'"
 					@input="grow"
 					@keydown="onKeydown"
 				/>

@@ -98,9 +98,15 @@ async function serveStatic(pathname: string, res: ServerResponse): Promise<void>
 	}
 	try {
 		const body = await readFile(filePath);
+		const type = MIME[extname(filePath)] ?? "application/octet-stream";
 		res.writeHead(200, {
-			"content-type": MIME[extname(filePath)] ?? "application/octet-stream",
-			"cache-control": "no-cache",
+			"content-type": type,
+			// The entry point must never be cached: a cached copy points at asset files that a
+			// rebuild has already deleted, and the browser then renders a blank page. Hashed assets
+			// are safe to keep (a changed file gets a new name).
+			"cache-control": type.startsWith("text/html")
+				? "no-store, must-revalidate"
+				: "public, max-age=31536000, immutable",
 		});
 		res.end(body);
 	} catch {
@@ -579,7 +585,11 @@ function main(): void {
 			state: (info: unknown): void => broadcast({ type: "pi_state", ...(info as object) }, workspaceByCwd(key)),
 			stderr: (chunk: string): void => broadcast({ type: "pi_stderr", chunk: chunk.slice(-2000) }, workspaceByCwd(key)),
 			ptyData: (data: string): void => broadcast({ type: "pty_data", workspace: key, data }, workspaceByCwd(key)),
-			ptyExit: (exitCode: number, signal?: number): void => broadcast({ type: "pty_exit", workspace: key, exitCode, signal }, workspaceByCwd(key)),
+			ptyExit: (exitCode: number, signal?: number): void => {
+				broadcast({ type: "pty_exit", workspace: key, exitCode, signal }, workspaceByCwd(key));
+				// State, not just an event: the UI must not show a terminal that no longer exists.
+				broadcast({ type: "pty_state", workspace: key, ...workspaces.get(key)!.pty.state() }, workspaceByCwd(key));
+			},
 			malformed: (line: string): void => broadcast({ type: "malformed", line: line.slice(0, 500) }, workspaceByCwd(key)),
 			preview: (): void => {
 				const workspace = workspaceByCwd(key);
@@ -683,7 +693,18 @@ function main(): void {
 				socket.send(JSON.stringify({ type: "error", message: "malformed client message" }));
 				return;
 			}
-			handleClientMessage(socket, message);
+			// One bad command must not take the service down: this process also owns every live
+			// workspace session and terminal, so an uncaught throw here is a total loss.
+			try {
+				handleClientMessage(socket, message);
+			} catch (error) {
+				console.error(`client command ${String(message.type)} failed: ${String(error)}`);
+				try {
+					socket.send(JSON.stringify({ type: "error", message: `${String(message.type)} failed: ${String(error)}` }));
+				} catch {
+					// the socket is already gone
+				}
+			}
 		});
 	});
 
@@ -856,6 +877,15 @@ function main(): void {
 				socket.send(JSON.stringify({ type: "pty_state", workspace: workspace.cwd, ...state }));
 				return;
 			}
+			case "pty_restart": {
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				const cols = Number(message.cols ?? 100);
+				const rows = Number(message.rows ?? 30);
+				const state = workspace.pty.restart(Number.isFinite(cols) ? cols : 100, Number.isFinite(rows) ? rows : 30);
+				socket.send(JSON.stringify({ type: "pty_state", workspace: workspace.cwd, ...state }));
+				return;
+			}
 			case "pty_input": {
 				// Typing into the terminal is a write: only the active workspace accepts it.
 				const workspace = resolve(message, socket, true);
@@ -877,6 +907,10 @@ function main(): void {
 				const workspace = resolve(message, socket, true);
 				if (!workspace) return;
 				workspace.pty.kill();
+				// A kill is a request, so it is answered with state (never with an "it exited" notice:
+				// the client asked for exactly this). A shell that dies on its own is an event instead,
+				// and that one is broadcast from the exit hook.
+				broadcast({ type: "pty_state", workspace: workspace.cwd, ...workspace.pty.state() }, workspaceByCwd(workspace.cwd));
 				return;
 			}
 			case "delete_session": {

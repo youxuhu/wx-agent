@@ -224,7 +224,7 @@ onMounted(() => {
 		<div class="list" style="max-height: 34vh">
 			<div v-for="row in sessionRows" :key="row.path" class="list-row clickable" :class="{ active: row.isCurrent }" @click="store.switchSession(row.path)">
 				<span class="chip" :class="row.isCurrent ? 'chip-ok' : ''">{{ row.isCurrent ? "current" : "switch" }}</span>
-				<span class="ellipsis">{{ row.title }}</span>
+				<span class="ellipsis" :title="row.title">{{ row.title }}</span>
 				<span class="spacer" />
 				<span class="tiny faint">{{ row.messageCount }} msg · {{ Math.max(1, Math.round(row.sizeBytes / 1024)) }}KB</span>
 			</div>

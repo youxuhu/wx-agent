@@ -32,6 +32,7 @@ export interface PtyState {
 	shell: string;
 }
 
+
 export class PtySession {
 	private pty: IPty | null = null;
 	private replay = "";
@@ -74,13 +75,25 @@ export class PtySession {
 				},
 			});
 			this.pty = child;
+			// Every callback checks that it still belongs to the *current* child. A killed shell exits
+			// asynchronously, so without this guard the old exit clears the reference to the shell that
+			// replaced it — leaving a live but untracked terminal (typing silently refused).
 			child.onData((data) => {
+				if (this.pty !== child) return;
 				this.appendReplay(data);
 				this.hooks.data(data);
 			});
 			child.onExit(({ exitCode, signal }) => {
+				if (this.pty !== child) return;
 				this.pty = null;
 				this.hooks.exit(exitCode, signal);
+			});
+			// An unhandled "error" event on an EventEmitter throws, and a throw here is a dead service.
+			(child as unknown as { on(event: string, handler: (error: unknown) => void): void }).on("error", (error) => {
+				if (this.pty !== child) return;
+				this.pty = null;
+				this.hooks.exit(1, undefined);
+				this.hooks.data(`\r\n[terminal error] ${String(error)}\r\n`);
 			});
 		} else if (cols !== this.cols || rows !== this.rows) {
 			this.resize(cols, rows);
@@ -116,6 +129,18 @@ export class PtySession {
 			// A resize can race with the exit of the shell; the next start() will pick the size up.
 			return false;
 		}
+	}
+
+	/**
+	 * Replace the shell with a fresh one: kill, forget the history of the old one, start again.
+	 * The old child's exit arrives later and is ignored by the identity guard above, so there is no
+	 * window in which the session points at a shell nobody owns.
+	 */
+	restart(cols = this.cols, rows = this.rows): PtyState {
+		this.kill();
+		this.replay = "";
+		this.droppedChars = 0;
+		return this.start(cols, rows);
 	}
 
 	kill(): void {

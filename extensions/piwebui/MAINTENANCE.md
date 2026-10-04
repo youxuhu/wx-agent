@@ -157,6 +157,19 @@ npm run desktop:build    # 出 .app + .dmg
 - 状态语义：`done` / `error` 来自真实结果；**没有结果的调用（中断、页面刷新前发生）必须显示 `unknown`**，不能假装还在跑。
 - 长输入/输出：保留尾部 20000 字符并**明确写出丢了多少**（不静默截断）。
 
+## 6.12 布局不变量（窗口变窄时必须仍然成立）
+
+窗口可以被拖得很窄（桌面版、或者把窗口贴边）。这些是**必须成立**的约束，改 UI 前先读：
+
+- **能收缩的才有 ellipsis**：`text-overflow` 需要块级盒 + 确定宽度。所以 `.ellipsis` 所在的 flex 子项必须能缩（`overflow: hidden` 会让 `min-width: auto` 变 0）；**列方向 flex 里不要用 `align-items: flex-start`** 装文本（子项收缩到内容宽度，ellipsis 永不触发）——会话名显示不全就是这个原因，已改成 `stretch`。
+- **不能让"标签"比内容还窄**：`.chip` 不能设 `min-width: 0`（芯片文字会溢到邻居身上，`current` 与分支名重叠就是它）；要缩就靠可缩的子元素。同理 `.list-row .chip { max-width: 50% }`，否则一个长 ref 会把同一行的提交标题挤成 0 宽。
+- **顶栏与标签不许自己缩**：`.tab { flex: 0 0 auto }` + `.topbar { flex-wrap: wrap }`——否则 `Settings` 会被裁成 `Setting`（看着像"刚好放得下"）。
+- **提示条与线程/输入框/状态行同一列**：`.banner { width: min(740px, calc(100% - 40px)); margin: 0 auto 8px }`。整条通栏时文字会贴窗口边缘、并被打开着的抽屉压住。
+- **窄窗口里抽屉改覆盖层**：`@media (max-width: 900px)` 下 `.drawer` 变 `position: absolute`（460+260 会把对话挤成 0 宽、抽屉自己溢出屏幕）；**侧栏不做覆盖层**（覆盖会挡住每行开头几个字），只是 `@media (max-width: 640px)` 收窄到 200px，仍然用 ☰ 收起。
+- **终端不横向滚动**：`.shell-term`/`.xterm` 一律 `overflow-x: hidden`，否则浅色终端底部会多出一条深色横向滚动条。
+- **入口 HTML 不许缓存**：静态服务对 `text/html` 发 `no-store, must-revalidate`，哈希资源发 `immutable`。缓存住的旧 `index.html` 指向已被删掉的旧 JS → **整页白屏**（重建之后最常见）。
+- **验证方式**：`screencapture -R` 截窗口区域 + 读图，比 GUI 无障碍树便宜得多；`osascript … set bounds of window 1` 改宽度，截前必须 `activate`，URL 带一个随机参数绕开缓存。可用的深链（也用于验证）：`?dir=`、`?file=`、`?drawer=files|git|shell|preview|settings`、`?gitTab=`、`?settingsTab=`。
+
 ## 6.11 终端是**真 PTY**（血泪教训）
 
 - 曾经把 Shell 做成"把命令丢给 pi 的 `bash`"：pi 的 bash **无状态**（每条命令一个新 shell、固定工作目录），所以 **`cd` 永远不生效**、**`clear` 只是个命令**（非 TTY 下 `TERM environment variable not set`，什么也不做）。用户一眼就看出来了。
@@ -164,6 +177,8 @@ npm run desktop:build    # 出 .app + .dmg
 - **代价必须说清**：终端输出**不进模型上下文**（它不是 pi 的 bash 结果）。UI 提供 *Insert screen into prompt* 让用户显式把屏幕内容交给模型，而不是假装它在上下文里。
 - 打包：node-pty 是**原生模块**，esbuild 必须 `--external:node-pty`，包要随 resources 分发，并 **`chmod +x prebuilds/darwin-<arch>/spawn-helper`**（npm 安装后常丢可执行位 → `posix_spawnp failed`）；只保留本平台 prebuild（整包 62MB → 6.2MB）。`desktop:verify` 会用**打包的 node**真的 spawn 一个 pty，证明确实可加载。
 - 客户端：`pty_data` 分片必须**入队再排空**（同一 tick 多个 chunk 覆盖同一个 ref 会让 watcher 只看到最后一个 → 快速输出丢数据）。
+- **"重启终端"的做法**：UI 上没有 Restart 按钮（用户要求去掉——它当初是最容易点到的坏路径）。要新 shell 就**关掉再打开 Shell 抽屉**（shell 退出后重开也会得到新 shell）。协议层仍保留 `pty_restart`（kill+start 一次原子操作）并有探针覆盖，但不再暴露成按钮。
+- **每条命令都不得带走服务**：`handleClientMessage` 外面必须有一层 try/catch。曾出现过：被 kill 的旧 shell **异步**退出，它的 `onExit` 把新 shell 的引用清成 null（新终端变孤儿、打字被拒），而抛错直接是进程级未捕获异常 → **所有 workspace 一起死**。现在 `onData`/`onExit`/`error` 回调都有**身份校验**（`this.pty !== child` 就忽略）。
 
 ## 6.10 Shell 抽屉与会话删除
 
@@ -178,6 +193,9 @@ npm run desktop:build    # 出 .app + .dmg
 | 页面 `not found: / (the UI is not built yet)` | `dist/` 不存在或路径不对：先 `npm run build`；桌面版看 `--web-dir` 是否指向 `Resources/dist` |
 | 顶栏 `service closed` / `connecting…` | 服务没起或被 kill；浏览器会 1/2/4/8/15s 退避重连（**不重放任何消息**） |
 | 顶栏 `pi exited (1)` | pi 子进程崩了：看服务日志 stderr 原文；常见是模型/凭据问题 |
+| 重建之后页面**整页白屏** | 浏览器缓存了旧 `index.html`（它引用已删除的旧 JS）；服务已改为对 HTML 发 `no-store`，硬刷新一次即可 |
+| 窄窗口下 `Settings` 被裁成 `Setting` | 标签被压缩了：`.tab` 必须 `flex: 0 0 auto`（见 §6.12） |
+| 会话名过长显示不全 | 列方向 flex 用了 `align-items: flex-start`（见 §6.12）；现在 `stretch` + `.side-title{max-width:100%}` |
 | 终端里 `cd` 不生效 / `clear` 无效 | 说明又走回了 pi 的 `bash`（无状态）：见 §6.11，Shell 抽屉必须是 PTY |
 | 终端起不来（`posix_spawnp failed`） | node-pty 的 `spawn-helper` 丢了可执行位；打包脚本已处理，手装时要 `chmod +x` |
 | 工具卡展开是空的 / 只有 `unknown` | 见 §6.9：检查历史解析（`toolCall.arguments` + `toolResult`）与实时提取是否都在 |

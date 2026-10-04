@@ -118,6 +118,8 @@ export const useSessionStore = defineStore("session", {
 		ptyOutputSeq: 0,
 		ptyRunning: false,
 		ptyShell: "",
+		/** Bumped when the service reports a terminal with no history to replay (a restart). */
+		ptyFreshSeq: 0,
 		ptyState: null as null | { replay: string; droppedChars: number; cols: number; rows: number },
 		authProviders: [] as Array<{ provider: string; kind: string; hasSecret: boolean; expires?: number }>,
 		authNote: "",
@@ -274,6 +276,9 @@ export const useSessionStore = defineStore("session", {
 				case "pty_state": {
 					this.ptyRunning = payload.running === true;
 					this.ptyShell = String(payload.shell ?? "");
+					// `replay` empty + running means a *fresh* terminal: the panel must clear its screen
+					// instead of leaving the dead one's text behind.
+					this.ptyFreshSeq += payload.replay ? 0 : 1;
 					this.ptyState = {
 						replay: String(payload.replay ?? ""),
 						droppedChars: Number(payload.droppedChars ?? 0),

@@ -298,7 +298,9 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 - **目录是唯一的入口**：顶栏左侧那个按钮（显示当前目录，长路径中间省略、`…` 标明是省略）负责打开 / 切换 / 关闭目录与最近目录；侧栏只负责会话，不再重复一个 "Open folder…"。**没有任何目录时**界面进入空态（"No folder open"）并请你自己选一个 —— 首次启动不会替你挑目录。
 - 目录记忆：`piwebui-workspaces.json` 里的 `active` 是"退出时开着的目录"，下次启动会打开它；想回到"让你自己选"就把这个文件移开。
-- 右侧抽屉：`Files` · `Git`（内含 `Changes` / `History` / `Branches` 分页）· `Shell`（**真终端**：服务端 node-pty 里的长驻 shell + 前端 xterm.js，`cd`/`export`/颜色/`clear`/全屏程序都原生可用；输出**不进模型上下文**，需要时用 *Insert screen into prompt*）· `Preview` · `Settings`（二级标签 `Model` / `Credentials` / `Commands` / `Session` / `Config`）。会话列表在左侧栏，每条可以删除（两步确认）。
+- 窗口变窄可用：顶栏换行、抽屉改为覆盖层，`Settings` 之类标签不会被裁掉；会话名/路径/refs 一律省略号（悬停看全）
+- 深链：`?dir=<目录>` 打开工作区、`?file=<路径>` 打开文件、`?drawer=files|git|shell|preview|settings`（可带 `?gitTab=` / `?settingsTab=`）直接打开某个抽屉
+- 右侧抽屉：`Files` · `Git`（内含 `Changes` / `History` / `Branches` 分页）· `Shell`（**真终端**（shell 退出后重开抽屉即得到新 shell）：服务端 node-pty 里的长驻 shell + 前端 xterm.js，`cd`/`export`/颜色/`clear`/全屏程序都原生可用；输出**不进模型上下文**，需要时用 *Insert screen into prompt*）· `Preview` · `Settings`（二级标签 `Model` / `Credentials` / `Commands` / `Session` / `Config`）。会话列表在左侧栏，每条可以删除（两步确认）。
 
 ## 运行状态与错误显示
 
