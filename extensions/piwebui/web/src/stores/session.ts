@@ -10,6 +10,7 @@
 import { defineStore } from "pinia";
 import {
 	blocksToText,
+	collectToolRuns,
 	messageToBlocks,
 	messageToText,
 	type ChatMessage,
@@ -412,7 +413,10 @@ export const useSessionStore = defineStore("session", {
 					const toolCallId = String(record.toolCallId ?? "");
 					const run = this.tools[toolCallId];
 					if (run) {
-						run.output = blocksToText((record.result as { content?: unknown })?.content ?? record.result);
+						const result = record.result as { content?: unknown; structuredContent?: unknown } | undefined;
+						run.output = blocksToText(result?.content ?? result);
+						// Some tools report only structured data; do not show an empty card for it.
+						if (!run.output && result?.structuredContent !== undefined) run.output = blocksToText(result.structuredContent);
 						run.status = record.isError ? "error" : "done";
 						run.endedAt = Date.now();
 					}
@@ -637,11 +641,15 @@ export const useSessionStore = defineStore("session", {
 			const rebuilt: ChatMessage[] = [];
 			for (const [index, raw] of messages.entries()) {
 				const message = raw as { role?: string; id?: string };
+				// A tool result is not a row of its own: it belongs to the card of the call it answers
+				// (collectToolRuns below attaches it), exactly like the terminal shows it.
 				if (message.role !== "user" && message.role !== "assistant") continue;
 				rebuilt.push({ id: String(message.id ?? `h-${index}`), role: message.role, blocks: messageToBlocks(raw), done: true });
 			}
 			this.messages = rebuilt;
-			this.tools = {};
+			// Input and output both live in the history; a run still in flight keeps its live record.
+			const live = Object.fromEntries(Object.entries(this.tools).filter(([, run]) => run.status === "running"));
+			this.tools = { ...collectToolRuns(messages), ...live };
 		},
 
 		applyUpdate(record: WireRecord): void {

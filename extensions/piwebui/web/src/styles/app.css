@@ -433,6 +433,16 @@ h4 {
 	font-family: var(--mono);
 }
 
+.tool-section {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.tool-section + .tool-section {
+	margin-top: 8px;
+}
+
 .tool-body {
 	padding: 8px 10px;
 	border-top: 1px solid var(--border);

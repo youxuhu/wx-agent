@@ -97,6 +97,7 @@ npm run desktop:build    # 出 .app + .dmg
 | `probe/disconnect-probe.ts` | :7801 + 测试 agentDir | 审批断线：仍挂起、不自动放行、无副作用、重连仍收到、拒绝后没执行 | 7/7 |
 | `probe/markdown-probe.ts` | 无（离线） | 渲染各构件 + `<script>`/`<img onerror>`/`javascript:` 三种注入被中和 | 13/13 |
 | `probe/health-probe.ts` | 无（离线） | 健康指示 9 种状态映射与优先级 | 9/9 |
+| `probe/tool-probe.ts` | 无（离线，含真实 `get_messages` 抓包） | 工具卡输入输出：从 assistant 的 `toolCall.arguments` 取输入、从 `role:"toolResult"` 消息取输出、`isError`→`error`、无结果的中断调用保持 `unknown`、图片结果降级为 `[image]`、历史不编造耗时 | 12/12 |
 | `probe/path-probe.ts` | 无（离线） | 顶栏路径显示：短路径原样、长路径保留根与末两段并带 `…`、空目录返回空串（由调用方给提示） | 8/8 |
 | `probe/no-workspace-probe.ts` | 无（自己起服务，端口 0） | 首启语义：没有 `--cwd` 时**不自动开目录**（`active=null`）、`/api/sessions` 409、prompt 被明确拒绝、开目录后成为 active、重启记住上次选的目录 | 7/7 |
 | `probe/message-probe.ts` | 无（离线，含真实 `get_messages` 抓包） | 消息块解析：判别字段是 **`kind`**（不是 `type`）、thinking 独立块、toolCall→toolCallId、字符串 content、空 content 不造假块、未知块类型被丢弃、`messageToText` 只取 text | 10/10 |
@@ -146,6 +147,14 @@ npm run desktop:build    # 出 .app + .dmg
 - 依赖目录的客户端水合（`get_state` / `list_sessions` / `preview_status` / `get_session_stats` / `get_messages` / `get_commands`）只在**有目录时**发一次，按目录去重；**断线重连必须重置这个去重标记**，否则重连后不再水合。
 - 服务端对"没有目录"的回答是明确的：WS 报 `no workspace is open yet`，`/api/sessions` 返回 409，绝不猜一个目录。
 
+## 6.9 工具卡的输入输出（"展开只有 unknown / no output reported"）
+
+- 一次工具调用**分散在两条历史消息里**：assistant 消息的 `toolCall` 块带 `arguments`（输入），紧随其后的 `role: "toolResult"` 消息带 `content`/`isError`（输出）。只解析 assistant 一侧，展开就必然是空的。
+- `role: "toolResult"` **不是独立行**：它属于对应调用的卡片（`collectToolRuns()` 负责挂回去）；把它当消息渲染会多出一堆只有工具输出的"对话"。
+- 实时路径同理：`tool_execution_update.partialResult` 是流式片段，`tool_execution_end.result.content` 是最终结果；`content` 为空时要退回 `structuredContent`（有些工具只给结构化数据）。
+- 状态语义：`done` / `error` 来自真实结果；**没有结果的调用（中断、页面刷新前发生）必须显示 `unknown`**，不能假装还在跑。
+- 长输入/输出：保留尾部 20000 字符并**明确写出丢了多少**（不静默截断）。
+
 ## 7. 故障排查
 
 | 现象 | 原因与处理 |
@@ -153,6 +162,7 @@ npm run desktop:build    # 出 .app + .dmg
 | 页面 `not found: / (the UI is not built yet)` | `dist/` 不存在或路径不对：先 `npm run build`；桌面版看 `--web-dir` 是否指向 `Resources/dist` |
 | 顶栏 `service closed` / `connecting…` | 服务没起或被 kill；浏览器会 1/2/4/8/15s 退避重连（**不重放任何消息**） |
 | 顶栏 `pi exited (1)` | pi 子进程崩了：看服务日志 stderr 原文；常见是模型/凭据问题 |
+| 工具卡展开是空的 / 只有 `unknown` | 见 §6.9：检查历史解析（`toolCall.arguments` + `toolResult`）与实时提取是否都在 |
 | 首次启动就进了某个目录（比如家目录） | 说明 `piwebui-workspaces.json` 里记着上次的目录；把该文件移开即回到"让你自己选"的行为 |
 | 消息只剩 `You` / `pi` 没有内容 | 块字段名写错（应为 `kind`）；`npm run typecheck`（vue-tsc）会报，`probe/message-probe.ts` 覆盖 |
 | 出错后再也发不出消息 / 输入框一直显示 Stop | 运行标志没复位：见 §6.6；先按 `Stop`（abort）恢复，再确认 `agent_end`/`agent_settled` 的置位逻辑没被改坏 |

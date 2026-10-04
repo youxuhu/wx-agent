@@ -8,14 +8,15 @@ export interface ToolRun {
 	partial: string;
 	/** `unknown` = we have no observable record (e.g. the run predates this page load). */
 	status: "running" | "done" | "error" | "unknown";
-	startedAt: number;
+	/** Absent for history: a reloaded conversation has no live timing to report. */
+	startedAt?: number;
 	endedAt?: number;
 }
 
 export type Block =
 	| { kind: "text"; text: string }
 	| { kind: "thinking"; text: string }
-	| { kind: "tool"; toolCallId: string; toolName?: string };
+	| { kind: "tool"; toolCallId: string; toolName?: string; args?: unknown };
 
 export interface ChatMessage {
 	id: string;
@@ -81,6 +82,7 @@ export function messageToBlocks(message: unknown): Block[] {
 		thinking?: string;
 		id?: string;
 		name?: string;
+		arguments?: unknown;
 		toolCallId?: string;
 		toolName?: string;
 	};
@@ -94,9 +96,9 @@ export function messageToBlocks(message: unknown): Block[] {
 			case "toolCall":
 			case "tool_call": {
 				const toolCallId = block.toolCallId ?? block.id;
-				// The name is on the wire too; keeping it lets history render a real name.
+				// The name and the arguments are on the wire too; history has nothing else.
 				const toolName = block.name ?? block.toolName;
-				if (toolCallId) blocks.push({ kind: "tool", toolCallId, ...(toolName ? { toolName } : {}) });
+				if (toolCallId) blocks.push({ kind: "tool", toolCallId, ...(toolName ? { toolName } : {}) , ...(block.arguments !== undefined ? { args: block.arguments } : {}) });
 				break;
 			}
 			default:
@@ -265,4 +267,49 @@ export interface GitCommit {
 	date: string;
 	subject: string;
 	refs: string;
+}
+
+/**
+ * Rebuild tool input/output from a conversation's history.
+ *
+ * A tool call is spread over two messages: the assistant message carries the call with its
+ * arguments, and a following `toolResult` message carries the output. A reloaded page only has
+ * these, so without this the cards would claim they know nothing — which is exactly what the
+ * terminal never does.
+ */
+export function collectToolRuns(messages: unknown[]): Record<string, ToolRun> {
+	const runs: Record<string, ToolRun> = {};
+	const ensure = (toolCallId: string): ToolRun =>
+		(runs[toolCallId] ??= {
+			toolCallId,
+			toolName: "tool",
+			output: "",
+			partial: "",
+			// Until a result shows up we genuinely do not know how it ended.
+			status: "unknown",
+		});
+
+	for (const raw of messages) {
+		const message = raw as { role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean };
+		if (message.role === "toolResult") {
+			const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : "";
+			if (!toolCallId) continue;
+			const run = ensure(toolCallId);
+			if (typeof message.toolName === "string" && message.toolName) run.toolName = message.toolName;
+			run.output = blocksToText(message.content);
+			run.status = message.isError ? "error" : "done";
+			continue;
+		}
+		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		for (const part of message.content) {
+			const block = part as { type?: string; id?: string; toolCallId?: string; name?: string; arguments?: unknown };
+			if (block?.type !== "toolCall" && block?.type !== "tool_call") continue;
+			const toolCallId = block.toolCallId ?? block.id;
+			if (!toolCallId) continue;
+			const run = ensure(toolCallId);
+			if (block.name) run.toolName = block.name;
+			if (block.arguments !== undefined) run.args = block.arguments;
+		}
+	}
+	return runs;
 }
