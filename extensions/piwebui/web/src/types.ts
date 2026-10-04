@@ -313,3 +313,22 @@ export function collectToolRuns(messages: unknown[]): Record<string, ToolRun> {
 	}
 	return runs;
 }
+
+/**
+ * One command in the shell drawer's scrollback — the same thing a terminal keeps: the command, its
+ * output, and the facts about that output (exit code, truncation, what was dropped from the buffer).
+ */
+export interface ShellEntry {
+	id: string;
+	command: string;
+	output: string;
+	/** Characters dropped from the front of the buffer we keep (stated, never silent). */
+	droppedChars: number;
+	exitCode: number | null;
+	running: boolean;
+	cancelled: boolean;
+	truncatedByPi: boolean;
+	fullOutputPath: string;
+	startedAt: number;
+	endedAt?: number;
+}

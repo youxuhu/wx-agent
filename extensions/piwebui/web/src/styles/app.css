@@ -857,3 +857,114 @@ input[type="checkbox"] {
 	min-width: 0;
 	overflow-wrap: anywhere;
 }
+
+/* ---- shell drawer: a terminal, so it owns its own layout ---- */
+.shell {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+.shell-bar {
+	border-bottom: 1px solid var(--line);
+	padding: 6px 10px;
+	gap: 8px;
+}
+
+.shell-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 8px 10px;
+	font-family: var(--mono);
+	font-size: 12.5px;
+	line-height: 1.5;
+}
+
+.shell-entry + .shell-entry {
+	margin-top: 12px;
+}
+
+.shell-echo {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.shell-prompt {
+	color: var(--fg-dim);
+	font-family: var(--mono);
+}
+
+.shell-out {
+	margin: 2px 0 2px 12px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.shell-input {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border-top: 1px solid var(--line);
+	padding: 8px 10px;
+}
+
+.shell-field {
+	flex: 1;
+	min-width: 0;
+	border: 0;
+	outline: 0;
+	background: transparent;
+	font-family: var(--mono);
+	font-size: 12.5px;
+	color: var(--fg);
+}
+
+/* session rows: a clickable title plus a delete affordance (buttons cannot nest) */
+.side-item {
+	flex-direction: row;
+	align-items: center;
+	gap: 4px;
+	padding: 0;
+}
+
+.side-open {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	background: none;
+	border: 0;
+	padding: 8px 10px;
+	text-align: left;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+
+.side-del {
+	flex: 0 0 auto;
+	border: 0;
+	background: none;
+	color: var(--fg-dim);
+	font-size: 15px;
+	line-height: 1;
+	padding: 6px 8px;
+	cursor: pointer;
+	opacity: 0;
+}
+
+.side-item:hover .side-del,
+.side-item:focus-within .side-del {
+	opacity: 1;
+}
+
+.side-del:hover {
+	color: var(--danger, #c0392b);
+}

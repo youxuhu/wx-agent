@@ -20,7 +20,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { PiRpcChild, type RpcRecord, type UiRequest } from "./rpc.ts";
-import { isSessionPathOf, listSessions } from "./sessions.ts";
+import { deleteSession, isSessionPathOf, listSessions } from "./sessions.ts";
 import { FILE_PREFIX, PROXY_PREFIX, filePreview, proxyRequest } from "./preview.ts";
 import { Workspace, workspaceKey } from "./workspace.ts";
 import { browse, listDir, readText } from "./fs.ts";
@@ -838,6 +838,30 @@ function main(): void {
 					}
 					workspace.child.command("switch_session", { sessionPath: path });
 				});
+				return;
+			}
+			case "delete_session": {
+				const path = String(message.path ?? "");
+				if (!path) {
+					broadcast({ type: "error", message: "delete_session needs a path" });
+					return;
+				}
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				if (message.confirmed !== true) {
+					// Deleting a conversation file is destructive; make the client say it meant it.
+					broadcast({ type: "error", message: "delete_session needs confirmed: true" }, workspace);
+					return;
+				}
+				// Guarded inside deleteSession (session dir of this workspace, never the open one).
+				void deleteSession(workspace.cwd, agentDir, path, { current: workspace.currentSessionPath })
+					.then(() => {
+						broadcast({ type: "session_deleted", path, workspace: workspace.cwd }, workspace);
+						return listSessions(workspace.cwd, agentDir).then((items) =>
+							broadcast({ type: "sessions", items, current: workspace.currentSessionPath, workspace: workspace.cwd }, workspace),
+						);
+					})
+					.catch((error: unknown) => broadcast({ type: "error", message: `delete_session: ${String(error)}` }, workspace));
 				return;
 			}
 			case "set_session_name": {

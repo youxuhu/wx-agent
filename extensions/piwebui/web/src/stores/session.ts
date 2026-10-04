@@ -29,6 +29,7 @@ import {
 	type PickRecord,
 	type PreviewInfo,
 	type SessionSummary,
+	type ShellEntry,
 	type ToolRun,
 	type UiRequest,
 } from "../types.ts";
@@ -52,6 +53,8 @@ export const useSessionStore = defineStore("session", {
 		cwd: "",
 		/** The workspace the current hydration belongs to (so it runs once per folder). */
 		hydratedFor: null as string | null,
+		/** A session row waiting for its second click (the deleting step). */
+		sessionDeletePending: null as string | null,
 		piState: "stopped" as string,
 		exitInfo: null as null | { code: number | null; signal: string | null; at: string },
 		messages: [] as ChatMessage[],
@@ -85,7 +88,7 @@ export const useSessionStore = defineStore("session", {
 		composerSeq: 0,
 		previewFrameKey: 0,
 		// control surface
-		drawer: "none" as "none" | "files" | "git" | "preview" | "settings",
+		drawer: "none" as "none" | "files" | "git" | "shell" | "preview" | "settings",
 		/**
 		 * Changes / History / Branches are one subject (git), so they are sub-tabs of a single
 		 * drawer instead of three peers of Files and Settings in the top bar.
@@ -105,13 +108,12 @@ export const useSessionStore = defineStore("session", {
 		configDraft: "" as string,
 		configStatus: "" as string,
 		shellCommand: "" as string,
-		shellOutput: "" as string,
-		shellExitCode: null as number | null,
 		shellRunning: false,
 		shellExcluded: true,
-		shellTruncatedByPi: false,
-		shellFullOutputPath: "",
-		shellShownFrom: 0,
+		/** Scrollback: one entry per command, each with its own facts (a terminal keeps history). */
+		shellEntries: [] as ShellEntry[],
+		shellHistory: [] as string[],
+		shellHistoryIndex: null as number | null,
 		authProviders: [] as Array<{ provider: string; kind: string; hasSecret: boolean; expires?: number }>,
 		authNote: "",
 		authStatus: "",
@@ -256,6 +258,10 @@ export const useSessionStore = defineStore("session", {
 						this.hydratedFor = null;
 						this.hydrate();
 					}
+					return;
+				}
+				case "session_deleted": {
+					this.notice = `deleted session file: ${String(payload.path ?? "")}`;
 					return;
 				}
 				case "notice": {
@@ -438,15 +444,8 @@ export const useSessionStore = defineStore("session", {
 				case "bash_execution_update": {
 					const delta = String(record.delta ?? "");
 					if (!delta) return;
-					const combined = this.shellOutput + delta;
-					// Keep the buffer bounded, but say where the shown text starts.
-					const LIMIT = 200_000;
-					if (combined.length > LIMIT) {
-						this.shellShownFrom += combined.length - LIMIT;
-						this.shellOutput = combined.slice(-LIMIT);
-					} else {
-						this.shellOutput = combined;
-					}
+					const entry = this.shellEntries[this.shellEntries.length - 1];
+					if (entry) this.appendShell(entry, delta);
 					return;
 				}
 				case "session_info_changed":
@@ -581,12 +580,18 @@ export const useSessionStore = defineStore("session", {
 				}
 				case "bash": {
 					this.shellRunning = false;
-					this.shellExitCode = typeof data.exitCode === "number" ? data.exitCode : null;
-					// The response may be truncated; the deltas already streamed in. Record the facts
-					// instead of silently showing less than what pi produced.
-					this.shellTruncatedByPi = data.truncated === true;
-					this.shellFullOutputPath = typeof data.fullOutputPath === "string" ? data.fullOutputPath : "";
-					if (data.output && !this.shellOutput) this.shellOutput = String(data.output);
+					const entry = this.shellEntries[this.shellEntries.length - 1];
+					if (entry) {
+						entry.running = false;
+						entry.endedAt = Date.now();
+						entry.exitCode = typeof data.exitCode === "number" ? data.exitCode : null;
+						entry.cancelled = data.cancelled === true;
+						// The response may be truncated; the deltas already streamed in. Record the facts
+						// instead of silently showing less than what pi produced.
+						entry.truncatedByPi = data.truncated === true;
+						entry.fullOutputPath = typeof data.fullOutputPath === "string" ? data.fullOutputPath : "";
+						if (data.output && !entry.output) this.appendShell(entry, String(data.output));
+					}
 					return;
 				}
 				case "clone":
@@ -719,6 +724,19 @@ export const useSessionStore = defineStore("session", {
 		/** Dismiss the current notice (it is a transient statement, not a state). */
 		clearNotice(): void {
 			this.notice = "";
+		},
+
+		/**
+		 * Delete a session file. Destructive, so it takes two steps (`confirmDeleteSession` then
+		 * `deleteSession`) and the service re-checks the guards: the path must be a session file of
+		 * this workspace and must not be the one that is currently open.
+		 */
+		confirmDeleteSession(path: string | null): void {
+			this.sessionDeletePending = path;
+		},
+		deleteSession(path: string): void {
+			this.sessionDeletePending = null;
+			this.send({ type: "delete_session", path, confirmed: true });
 		},
 
 		/** Switch the git sub-tab and load whatever that view needs (the panels do not self-load). */
@@ -1278,16 +1296,53 @@ export const useSessionStore = defineStore("session", {
 			this.insertIntoPrompt(`/${name} `);
 			this.showControl = false;
 		},
+		/** Append to a scrollback entry, keeping the buffer bounded but stating what was dropped. */
+		appendShell(entry: ShellEntry, text: string): void {
+			const LIMIT = 200_000;
+			const combined = entry.output + text;
+			if (combined.length > LIMIT) {
+				entry.droppedChars += combined.length - LIMIT;
+				entry.output = combined.slice(-LIMIT);
+			} else {
+				entry.output = combined;
+			}
+		},
+
 		runBash(): void {
 			const command = this.shellCommand.trim();
 			if (!command) return;
-			this.shellOutput = "";
-			this.shellExitCode = null;
+			this.shellHistory = [command, ...this.shellHistory.filter((item) => item !== command)].slice(0, 50);
+			this.shellHistoryIndex = null;
+			this.shellEntries.push({
+				id: `sh-${Date.now()}`,
+				command,
+				output: "",
+				droppedChars: 0,
+				exitCode: null,
+				running: true,
+				cancelled: false,
+				truncatedByPi: false,
+				fullOutputPath: "",
+				startedAt: Date.now(),
+			});
 			this.shellRunning = true;
-			this.shellShownFrom = 0;
-			this.shellTruncatedByPi = false;
-			this.shellFullOutputPath = "";
+			this.shellCommand = "";
 			this.send({ type: "bash", command, excludeFromContext: this.shellExcluded });
+		},
+
+		clearShell(): void {
+			this.shellEntries = [];
+		},
+
+		/** ↑ / ↓ walk the command history like a shell does. */
+		recallShell(direction: "older" | "newer"): void {
+			if (!this.shellHistory.length) return;
+			const current = this.shellHistoryIndex;
+			const next = direction === "older"
+				? (current === null ? 0 : Math.min(current + 1, this.shellHistory.length - 1))
+				: (current === null ? null : current - 1);
+			this.shellHistoryIndex = next === -1 ? null : next;
+			this.shellCommand = this.shellHistoryIndex === null ? "" : (this.shellHistory[this.shellHistoryIndex] ?? "");
 		},
 		abortBash(): void {
 			this.send({ type: "abort_bash" });

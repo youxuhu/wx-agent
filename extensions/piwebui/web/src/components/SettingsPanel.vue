@@ -3,7 +3,7 @@
  * Settings drawer: model / thinking / behaviour, discoverable commands, session tools, shell
  * and the allowlisted config files. Every button is a real RPC command or HTTP endpoint.
  */
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useSessionStore } from "../stores/session.ts";
 
 const store = useSessionStore();
@@ -13,7 +13,6 @@ const authProvider = ref("");
 const authKey = ref("");
 const defaultProvider = ref("");
 const defaultModel = ref("");
-const shellBox = ref<HTMLElement | null>(null);
 
 const oauthProviders = computed(() => store.authProviders.filter((entry) => entry.kind === "oauth").map((entry) => entry.provider));
 
@@ -50,13 +49,6 @@ function copy(text: string): void {
 }
 
 /** Keep the newest shell output in view. */
-watch(
-	() => store.shellOutput,
-	async () => {
-		await nextTick();
-		if (shellBox.value) shellBox.value.scrollTop = shellBox.value.scrollHeight;
-	},
-);
 
 const statsLines = computed(() => {
 	const stats = store.stats;
@@ -257,31 +249,6 @@ onMounted(() => {
 				<button class="btn btn-sm btn-ghost" @click="store.insertIntoPrompt(store.lastAssistantText)">Insert into prompt</button>
 			</div>
 			<pre class="code-block">{{ store.lastAssistantText }}</pre>
-		</div>
-
-		<!-- shell -->
-		<h4>Shell</h4>
-		<p class="fact tiny">Runs through pi's <code>bash</code> command (the TUI's <code>!</code>). Output reaches the model on the next prompt unless excluded.</p>
-		<div class="row-nowrap">
-			<input v-model="store.shellCommand" class="field" placeholder="ls -la" @keydown.enter="store.runBash()" />
-			<button class="btn btn-sm" :disabled="!store.shellCommand.trim() || store.shellRunning" @click="store.runBash()">Run</button>
-			<button class="btn btn-sm" :disabled="!store.shellRunning" @click="store.abortBash()">Abort</button>
-		</div>
-		<div class="row">
-			<label class="row tiny"><input v-model="store.shellExcluded" type="checkbox" /><span>exclude from context</span></label>
-			<span v-if="store.shellExitCode !== null" class="chip">exit {{ store.shellExitCode }}</span>
-			<span v-if="store.shellRunning" class="chip chip-warn">running</span>
-		</div>
-		<div v-if="store.shellOutput" class="output">
-			<div class="output-head">
-				<span>{{ store.shellOutput.length }} chars shown</span>
-				<span v-if="store.shellShownFrom" class="err">earlier {{ store.shellShownFrom }} chars dropped from the buffer</span>
-				<span v-if="store.shellTruncatedByPi" class="err">pi truncated its response</span>
-				<span v-if="store.shellFullOutputPath" class="mono ellipsis">full log: {{ store.shellFullOutputPath }}</span>
-				<span class="spacer" />
-				<button class="btn btn-sm btn-ghost" @click="copy(store.shellOutput)">Copy</button>
-			</div>
-			<pre ref="shellBox" class="code-block">{{ store.shellOutput }}</pre>
 		</div>
 
 		<!-- config -->

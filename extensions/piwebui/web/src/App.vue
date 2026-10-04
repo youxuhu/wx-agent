@@ -11,6 +11,7 @@ import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
 import StatusBar from "./components/StatusBar.vue";
 import FilePanel from "./components/FilePanel.vue";
+import ShellPanel from "./components/ShellPanel.vue";
 import ChangesPanel from "./components/ChangesPanel.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import BranchPanel from "./components/BranchPanel.vue";
@@ -85,6 +86,8 @@ const TABS = [
 	// Changes / History / Branches are all git; they are sub-tabs inside this drawer, not three
 	// peers of Files and Settings in the top bar.
 	{ key: "git", label: "Git" },
+	// The shell is its own place, next to Git, not a form buried in the settings page.
+	{ key: "shell", label: "Shell" },
 	{ key: "preview", label: "Preview" },
 	{ key: "settings", label: "Settings" },
 ] as const;
@@ -171,16 +174,30 @@ onMounted(() => {
 				<button class="btn btn-sm btn-primary" @click="store.newSession()">New session</button>
 				<h4>Sessions</h4>
 				<div class="side-list">
-					<button
+					<div
 						v-for="session in store.sessions"
 						:key="session.path"
 						class="side-item"
 						:class="{ active: session.path === store.currentSessionPath }"
-						@click="store.switchSession(session.path)"
 					>
-						<span class="side-title">{{ session.name || session.firstPrompt || session.id }}</span>
-						<span class="tiny faint">{{ new Date(session.updatedAt).toLocaleString() }} · {{ session.messageCount }} msg</span>
-					</button>
+						<button class="side-open" @click="store.switchSession(session.path)">
+							<span class="side-title">{{ session.name || session.firstPrompt || session.id }}</span>
+							<span class="tiny faint">{{ new Date(session.updatedAt).toLocaleString() }} · {{ session.messageCount }} msg</span>
+						</button>
+						<!-- Deleting a conversation is destructive: the first click asks, the second does it. -->
+						<template v-if="store.sessionDeletePending === session.path">
+							<button class="btn btn-sm btn-danger" title="Delete this session file" @click="store.deleteSession(session.path)">Delete</button>
+							<button class="btn btn-sm btn-ghost" @click="store.confirmDeleteSession(null)">Cancel</button>
+						</template>
+						<button
+							v-else
+							class="side-del"
+							:title="session.path === store.currentSessionPath ? 'This session is open — switch to another one before deleting it' : 'Delete this session'"
+							@click.stop="store.confirmDeleteSession(session.path)"
+						>
+							×
+						</button>
+					</div>
 					<p v-if="!store.cwd" class="tiny faint">Open a folder to see its sessions.</p>
 					<p v-else-if="!store.sessions.length" class="tiny faint">No sessions for this directory yet.</p>
 				</div>
@@ -247,7 +264,7 @@ onMounted(() => {
 					@keydown="onResizeKey"
 				/>
 				<div class="drawer-head">
-					<strong class="small">{{ store.drawer === "git" ? "Git" : store.drawer }}</strong>
+					<strong class="small">{{ store.drawer === "git" ? "Git" : store.drawer === "shell" ? "Shell" : store.drawer }}</strong>
 					<span class="spacer" />
 					<button class="btn btn-ghost btn-sm" @click="store.drawer = 'none'">×</button>
 				</div>
@@ -267,6 +284,7 @@ onMounted(() => {
 					<ChangesPanel v-else-if="store.drawer === 'git' && store.gitTab === 'changes'" />
 					<HistoryPanel v-else-if="store.drawer === 'git' && store.gitTab === 'history'" />
 					<BranchPanel v-else-if="store.drawer === 'git' && store.gitTab === 'branches'" />
+					<ShellPanel v-else-if="store.drawer === 'shell'" />
 					<PreviewPanel v-else-if="store.drawer === 'preview'" />
 					<SettingsPanel v-else-if="store.drawer === 'settings'" />
 				</div>

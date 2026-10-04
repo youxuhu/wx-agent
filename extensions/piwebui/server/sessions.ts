@@ -8,7 +8,7 @@
  * validates that a switch target really is a session file of the current cwd.
  */
 
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat, unlink } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
 export interface SessionSummary {
@@ -144,4 +144,28 @@ export async function isSessionPathOf(cwd: string, agentDir: string, path: strin
 	const dir = resolve(await sessionsDirFor(cwd, agentDir));
 	const target = resolve(path);
 	return target.startsWith(`${dir}/`) && target.endsWith(".jsonl");
+}
+
+/**
+ * Delete a session file.
+ *
+ * Two invariants, both enforced here rather than at the call site: the path must be a `.jsonl`
+ * session file *inside this workspace's* session directory, and it must not be the session that is
+ * currently open — pi holds that file and would keep writing into a deleted inode. Callers are
+ * expected to have asked the user; this function never guesses.
+ */
+export async function deleteSession(
+	cwd: string,
+	agentDir: string,
+	path: string,
+	options: { current?: string | null } = {},
+): Promise<void> {
+	if (!(await isSessionPathOf(cwd, agentDir, path))) {
+		throw new Error(`refused: not a session file of ${cwd}: ${path}`);
+	}
+	const current = options.current ? resolve(options.current) : null;
+	if (current && resolve(path) === current) {
+		throw new Error("refused: this session is open — switch to another one before deleting it");
+	}
+	await unlink(path);
 }
