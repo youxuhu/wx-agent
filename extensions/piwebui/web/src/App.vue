@@ -5,6 +5,7 @@
  * Facts only — every badge shows what the service reported.
  */
 import { computed, onMounted, ref } from "vue";
+import { compactPath } from "./path.ts";
 import MessageList from "./components/MessageList.vue";
 import Composer from "./components/Composer.vue";
 import ApprovalDialog from "./components/ApprovalDialog.vue";
@@ -21,6 +22,12 @@ import { useSessionStore } from "./stores/session.ts";
 
 const store = useSessionStore();
 const sidebarOpen = ref(true);
+
+/**
+ * Short label for the workspace entry: the folder's own name, with the full path kept in the
+ * tooltip (and in the sidebar footer when the sidebar is visible).
+ */
+const cwdLabel = computed(() => (store.cwd ? compactPath(store.cwd) : "Open folder…"));
 
 /**
  * Right drawer width: dragged by the handle on its left edge and remembered per browser.
@@ -75,11 +82,17 @@ const health = computed(() =>
 
 const TABS = [
 	{ key: "files", label: "Files" },
+	// Changes / History / Branches are all git; they are sub-tabs inside this drawer, not three
+	// peers of Files and Settings in the top bar.
+	{ key: "git", label: "Git" },
+	{ key: "preview", label: "Preview" },
+	{ key: "settings", label: "Settings" },
+] as const;
+
+const GIT_TABS = [
 	{ key: "changes", label: "Changes" },
 	{ key: "history", label: "History" },
 	{ key: "branches", label: "Branches" },
-	{ key: "preview", label: "Preview" },
-	{ key: "settings", label: "Settings" },
 ] as const;
 
 function toggleDrawer(key: string): void {
@@ -90,7 +103,7 @@ function toggleDrawer(key: string): void {
 	}
 	store.drawer = store.drawer === key ? "none" : (key as typeof store.drawer);
 	if (store.drawer === "files") store.loadTree(store.cwd);
-	if (store.drawer === "changes" || store.drawer === "branches") store.refreshGit();
+	if (store.drawer === "git") store.refreshGit();
 }
 
 /** Deep links: `?dir=` opens a workspace, `?file=` shows one file in the files drawer. */
@@ -118,7 +131,19 @@ onMounted(() => {
 	<div class="app">
 		<header class="topbar">
 			<button class="btn btn-ghost btn-sm" :title="sidebarOpen ? 'Hide tasks' : 'Show tasks'" @click="sidebarOpen = !sidebarOpen">☰</button>
-			<button class="btn btn-sm" @click="store.openFolderPicker()">{{ store.cwd || "choose folder" }}</button>
+			<!--
+				The single workspace entry point: it carries the current folder, and opening it
+				offers browse / recent / switch / close. The sidebar used to repeat it as an
+				"Open folder…" button calling the same action.
+			-->
+			<button
+				class="btn btn-sm dir-btn"
+				:title="store.cwd ? `${store.cwd} — open, switch or close a folder` : 'Open a folder'"
+				@click="store.openFolderPicker()"
+			>
+				<span class="dir-name">{{ cwdLabel }}</span>
+				<span class="caret">▾</span>
+			</button>
 			<!--
 				One health indicator instead of two chips that both read "fine" when everything is
 				fine: the browser↔service socket and the pi child process. It names the specific
@@ -144,7 +169,6 @@ onMounted(() => {
 		<div class="body">
 			<aside class="sidebar" :class="{ collapsed: !sidebarOpen }">
 				<button class="btn btn-sm btn-primary" @click="store.newSession()">New session</button>
-				<button class="btn btn-sm" @click="store.openFolderPicker()">Open folder…</button>
 				<h4>Sessions</h4>
 				<div class="side-list">
 					<button
@@ -157,24 +181,35 @@ onMounted(() => {
 						<span class="side-title">{{ session.name || session.firstPrompt || session.id }}</span>
 						<span class="tiny faint">{{ new Date(session.updatedAt).toLocaleString() }} · {{ session.messageCount }} msg</span>
 					</button>
-					<p v-if="!store.sessions.length" class="tiny faint">No sessions for this directory yet.</p>
+					<p v-if="!store.cwd" class="tiny faint">Open a folder to see its sessions.</p>
+					<p v-else-if="!store.sessions.length" class="tiny faint">No sessions for this directory yet.</p>
 				</div>
 				<div class="col">
-					<span class="tiny faint ellipsis">workspace: {{ store.workspaces.length }}</span>
+					<span class="tiny faint ellipsis mono" :title="store.cwd || 'no folder open'">
+						{{ store.cwd || "(no folder)" }}<template v-if="store.workspaces.length > 1"> · +{{ store.workspaces.length - 1 }} open</template>
+					</span>
 					<span class="tiny faint ellipsis">session: {{ store.sessionName || "(unnamed)" }}</span>
 					<button class="btn btn-sm btn-ghost" @click="store.listSessions()">Refresh sessions</button>
 				</div>
 			</aside>
 
 			<main class="main">
-				<MessageList :messages="store.messages" :tools="store.tools" />
+				<div v-if="!store.cwd" class="empty-state">
+					<h2>No folder open</h2>
+					<p class="dim">
+						pi works inside a directory, and every session belongs to one. Open the folder you want to work in — nothing is read until you do.
+					</p>
+					<button class="btn btn-primary" @click="store.openFolderPicker()">Open folder…</button>
+				</div>
+				<MessageList v-else :messages="store.messages" :tools="store.tools" />
 				<footer v-if="store.retry" class="banner row">
 					<span class="chip chip-warn">retry {{ store.retry.attempt }}/{{ store.retry.max }}</span>
 					<span class="ellipsis">{{ store.retry.reason }}</span>
 				</footer>
 				<footer v-if="store.notice" class="banner row">
 					<span class="chip chip-warn">notice</span>
-					<span>{{ store.notice }}</span>
+					<span class="err-body">{{ store.notice }}</span>
+					<button class="btn btn-sm btn-ghost" @click="store.clearNotice()">Dismiss</button>
 				</footer>
 				<footer v-if="store.lastError" class="banner row">
 					<span class="chip chip-danger">error</span>
@@ -184,6 +219,7 @@ onMounted(() => {
 					<button class="btn btn-sm btn-ghost" @click="store.clearError()">Dismiss</button>
 				</footer>
 				<Composer
+					v-if="store.cwd"
 					:running="store.running"
 					:queue-steering="store.queueSteering"
 					:queue-follow-up="store.queueFollowUp"
@@ -194,7 +230,7 @@ onMounted(() => {
 					@abort="store.abort()"
 					@notice="store.notice = $event"
 				/>
-				<div style="padding: 0 20px 8px">
+				<div v-if="store.cwd" style="padding: 0 20px 8px">
 					<StatusBar />
 				</div>
 			</main>
@@ -211,15 +247,26 @@ onMounted(() => {
 					@keydown="onResizeKey"
 				/>
 				<div class="drawer-head">
-					<strong class="small">{{ store.drawer }}</strong>
+					<strong class="small">{{ store.drawer === "git" ? "Git" : store.drawer }}</strong>
 					<span class="spacer" />
 					<button class="btn btn-ghost btn-sm" @click="store.drawer = 'none'">×</button>
 				</div>
+				<div v-if="store.drawer === 'git'" class="subtabs">
+					<button
+						v-for="tab in GIT_TABS"
+						:key="tab.key"
+						class="tab tab-sm"
+						:class="{ active: store.gitTab === tab.key }"
+						@click="store.setGitTab(tab.key)"
+					>
+						{{ tab.label }}
+					</button>
+				</div>
 				<div class="drawer-body">
 					<FilePanel v-if="store.drawer === 'files'" />
-					<ChangesPanel v-else-if="store.drawer === 'changes'" />
-					<HistoryPanel v-else-if="store.drawer === 'history'" />
-					<BranchPanel v-else-if="store.drawer === 'branches'" />
+					<ChangesPanel v-else-if="store.drawer === 'git' && store.gitTab === 'changes'" />
+					<HistoryPanel v-else-if="store.drawer === 'git' && store.gitTab === 'history'" />
+					<BranchPanel v-else-if="store.drawer === 'git' && store.gitTab === 'branches'" />
 					<PreviewPanel v-else-if="store.drawer === 'preview'" />
 					<SettingsPanel v-else-if="store.drawer === 'settings'" />
 				</div>

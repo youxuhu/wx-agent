@@ -55,6 +55,51 @@ textarea {
 }
 
 /* --- primitives --------------------------------------------------------- */
+.empty-state {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	flex: 1;
+	padding: 0 24px;
+	text-align: center;
+}
+
+.empty-state p {
+	max-width: 46ch;
+	line-height: 1.5;
+}
+
+.subtabs {
+	display: flex;
+	gap: 2px;
+	padding: 6px 12px;
+	border-bottom: 1px solid var(--line);
+}
+
+.tab-sm {
+	font-size: 12px;
+	padding: 3px 8px;
+}
+
+.dir-btn {
+	gap: 6px;
+	max-width: 40vw;
+}
+
+.dir-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.dir-btn .caret {
+	font-size: 9px;
+	color: var(--fg-dim);
+}
+
 .btn {
 	display: inline-flex;
 	align-items: center;

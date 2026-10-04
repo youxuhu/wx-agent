@@ -97,6 +97,8 @@ npm run desktop:build    # 出 .app + .dmg
 | `probe/disconnect-probe.ts` | :7801 + 测试 agentDir | 审批断线：仍挂起、不自动放行、无副作用、重连仍收到、拒绝后没执行 | 7/7 |
 | `probe/markdown-probe.ts` | 无（离线） | 渲染各构件 + `<script>`/`<img onerror>`/`javascript:` 三种注入被中和 | 13/13 |
 | `probe/health-probe.ts` | 无（离线） | 健康指示 9 种状态映射与优先级 | 9/9 |
+| `probe/path-probe.ts` | 无（离线） | 顶栏路径显示：短路径原样、长路径保留根与末两段并带 `…`、空目录返回空串（由调用方给提示） | 8/8 |
+| `probe/no-workspace-probe.ts` | 无（自己起服务，端口 0） | 首启语义：没有 `--cwd` 时**不自动开目录**（`active=null`）、`/api/sessions` 409、prompt 被明确拒绝、开目录后成为 active、重启记住上次选的目录 | 7/7 |
 | `probe/message-probe.ts` | 无（离线，含真实 `get_messages` 抓包） | 消息块解析：判别字段是 **`kind`**（不是 `type`）、thinking 独立块、toolCall→toolCallId、字符串 content、空 content 不造假块、未知块类型被丢弃、`messageToText` 只取 text | 10/10 |
 | `probe/run-lifecycle-probe.ts` | :7799 | 运行生命周期：运行中 plain prompt 会被 pi 拒绝（所以我们必须带 `streamingBehavior`）、`followUp` 被接受（`disposition: queued`）、settle 后 plain prompt 又能用、`get_state.isStreaming` 是布尔 | 6/6 |
 | `probe/auth-probe.ts` | :7802 + 一次性 agentDir | provider 列表、**响应里不出现任何密钥值**（与真实 auth.json 比对）、OAuth 不可被 api key 覆盖、坏 provider/空 key 拒绝、写入合并、删除需确认、文件权限 600 | 11/11 |
@@ -138,6 +140,12 @@ npm run desktop:build    # 出 .app + .dmg
 - 为什么没被拦住：`tsc --noEmit` **不检查 `.vue` 模板**。现在 `npm run typecheck` 走 **vue-tsc**，模板里的类型错误会直接报出来（这条就是它抓到的第二处：`ToolCard` 用了不存在的 `run.name`，真实字段是 `toolName`）。
 - 改动消息渲染后跑 `probe/message-probe.ts`（用真实抓包做输入）。
 
+## 6.8 没有目录也是一种合法状态
+
+- `--cwd` 是**可选**的。不传时：先看 `piwebui-workspaces.json` 里记的 `active`（上次退出时开着的目录）并打开它；**没有记录就什么都不开**，界面给出 "No folder open" 并让用户选（首启绝不替用户挑目录——不能默认 `process.cwd()`，macOS 上那是 `/`）。
+- 依赖目录的客户端水合（`get_state` / `list_sessions` / `preview_status` / `get_session_stats` / `get_messages` / `get_commands`）只在**有目录时**发一次，按目录去重；**断线重连必须重置这个去重标记**，否则重连后不再水合。
+- 服务端对"没有目录"的回答是明确的：WS 报 `no workspace is open yet`，`/api/sessions` 返回 409，绝不猜一个目录。
+
 ## 7. 故障排查
 
 | 现象 | 原因与处理 |
@@ -145,6 +153,7 @@ npm run desktop:build    # 出 .app + .dmg
 | 页面 `not found: / (the UI is not built yet)` | `dist/` 不存在或路径不对：先 `npm run build`；桌面版看 `--web-dir` 是否指向 `Resources/dist` |
 | 顶栏 `service closed` / `connecting…` | 服务没起或被 kill；浏览器会 1/2/4/8/15s 退避重连（**不重放任何消息**） |
 | 顶栏 `pi exited (1)` | pi 子进程崩了：看服务日志 stderr 原文；常见是模型/凭据问题 |
+| 首次启动就进了某个目录（比如家目录） | 说明 `piwebui-workspaces.json` 里记着上次的目录；把该文件移开即回到"让你自己选"的行为 |
 | 消息只剩 `You` / `pi` 没有内容 | 块字段名写错（应为 `kind`）；`npm run typecheck`（vue-tsc）会报，`probe/message-probe.ts` 覆盖 |
 | 出错后再也发不出消息 / 输入框一直显示 Stop | 运行标志没复位：见 §6.6；先按 `Stop`（abort）恢复，再确认 `agent_end`/`agent_settled` 的置位逻辑没被改坏 |
 | 审批弹窗不出现 | 只有 `select/confirm/input/editor` 是对话框；`policy` 处于 `auto` 模式时 ask 规则会被自动放行（有审计）；`/policy mode normal` 可恢复 |

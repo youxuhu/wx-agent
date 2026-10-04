@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** Open folder: browse allowed roots, recent workspaces, switch/close. */
+/** Workspace dialog: browse allowed roots, recent folders, switch/close open workspaces. */
 import { ref } from "vue";
 import { useSessionStore } from "../stores/session.ts";
 
@@ -10,7 +10,7 @@ const manual = ref("");
 <template>
 	<div v-if="store.showFolderPicker" class="overlay" @click.self="store.showFolderPicker = false">
 		<div class="modal">
-			<h3>Open folder</h3>
+			<h3>Workspace</h3>
 			<div class="row">
 				<button v-for="root in store.browseRoots" :key="root.path" class="btn btn-sm" @click="store.browseTo(root.path)">{{ root.label }}</button>
 				<button class="btn btn-sm" :disabled="!store.browseParent" @click="store.browseTo(store.browseParent ?? '')">Up</button>

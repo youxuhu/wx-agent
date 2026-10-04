@@ -35,6 +35,11 @@ check(
 	assistantBlocks.some((block) => block.kind === "tool" && block.toolCallId === "call_1"),
 	JSON.stringify(assistantBlocks.find((block) => block.kind === "tool")),
 );
+check(
+	"the tool name travels with the block (history can show a real name)",
+	assistantBlocks.some((block) => block.kind === "tool" && block.toolName === "bash"),
+	JSON.stringify(assistantBlocks.find((block) => block.kind === "tool")),
+);
 check("every captured message renders at least one block", userBlocks.length > 0 && assistantBlocks.length > 0, `${userBlocks.length} + ${assistantBlocks.length}`);
 
 const stringContent = messageToBlocks({ role: "user", content: "plain string content" });

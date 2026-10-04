@@ -20,7 +20,7 @@ const props = defineProps<{ messages: ChatMessage[]; tools: Record<string, ToolR
 						<summary>thinking</summary>
 						<pre class="dim">{{ block.text }}</pre>
 					</details>
-					<ToolCard v-else-if="block.kind === 'tool'" :run="props.tools[block.toolCallId]" />
+					<ToolCard v-else-if="block.kind === 'tool'" :run="props.tools[block.toolCallId]" :fallback-name="block.toolName" />
 				</template>
 			</article>
 		</div>

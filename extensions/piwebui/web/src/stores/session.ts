@@ -49,6 +49,8 @@ export const useSessionStore = defineStore("session", {
 	state: () => ({
 		conn: "connecting" as ConnState,
 		cwd: "",
+		/** The workspace the current hydration belongs to (so it runs once per folder). */
+		hydratedFor: null as string | null,
 		piState: "stopped" as string,
 		exitInfo: null as null | { code: number | null; signal: string | null; at: string },
 		messages: [] as ChatMessage[],
@@ -82,7 +84,12 @@ export const useSessionStore = defineStore("session", {
 		composerSeq: 0,
 		previewFrameKey: 0,
 		// control surface
-		drawer: "none" as "none" | "files" | "changes" | "history" | "branches" | "preview" | "settings",
+		drawer: "none" as "none" | "files" | "git" | "preview" | "settings",
+		/**
+		 * Changes / History / Branches are one subject (git), so they are sub-tabs of a single
+		 * drawer instead of three peers of Files and Settings in the top bar.
+		 */
+		gitTab: "changes" as "changes" | "history" | "branches",
 		showControl: false,
 		controlTab: "commands" as string,
 		commands: [] as CommandInfo[],
@@ -166,18 +173,15 @@ export const useSessionStore = defineStore("session", {
 				const queued = this.pendingSends;
 				this.pendingSends = [];
 				for (const message of queued) this.send(message);
-				// hydrate: current session + the session list + dev server state
-				this.send({ type: "get_state" });
-				this.send({ type: "list_sessions" });
-				this.send({ type: "preview_status" });
-				this.send({ type: "get_session_stats" });
-				// a reload must not lose the conversation: ask for the current messages
-				this.send({ type: "get_messages" });
-				this.send({ type: "get_commands" });
+				// The workspace list is the one thing that does not need a folder; everything else
+				// is asked for once a folder is known (see hydrate()).
 				this.send({ type: "list_workspaces" });
+				this.hydrate();
 			});
 			socket.addEventListener("close", () => {
 				this.conn = "closed";
+				// A reconnected socket must hydrate again from scratch (nothing is replayed).
+				this.hydratedFor = null;
 				// Reconnect with backoff. Nothing is replayed: the socket reconnects, then the
 				// client re-hydrates from the service, so no prompt or approval is re-sent.
 				const delays = [1000, 2000, 4000, 8000, 15000];
@@ -241,10 +245,16 @@ export const useSessionStore = defineStore("session", {
 		handle(payload: { type?: string; [key: string]: unknown }): void {
 			switch (payload.type) {
 				case "workspaces": {
+					const before = this.cwd;
 					this.workspaces = (payload.workspaces as WorkspaceInfo[] | undefined) ?? [];
 					this.activeWorkspace = (payload.active as string | null) ?? null;
 					this.recentWorkspaces = (payload.recent as string[] | undefined) ?? [];
 					this.cwd = this.activeWorkspace ?? this.cwd;
+					// A newly opened folder has its own session and state to load.
+					if (this.cwd !== before) {
+						this.hydratedFor = null;
+						this.hydrate();
+					}
 					return;
 				}
 				case "notice": {
@@ -257,6 +267,7 @@ export const useSessionStore = defineStore("session", {
 					this.activeWorkspace = (payload.active as string | null) ?? null;
 					this.recentWorkspaces = (payload.recent as string[] | undefined) ?? [];
 					if (this.activeWorkspace) this.cwd = this.activeWorkspace;
+					this.hydrate();
 					this.piState = String(payload.state ?? "unknown");
 					this.currentSessionPath = (payload.currentSessionPath as string | null) ?? null;
 					this.exitInfo = (payload.exitInfo as typeof this.exitInfo) ?? null;
@@ -326,6 +337,8 @@ export const useSessionStore = defineStore("session", {
 					this.speed = null;
 					this.speedSample = null;
 					this.clearError();
+					// A notice describes one moment ("queued as a follow-up"); a new run makes it stale.
+					this.notice = "";
 					return;
 				case "agent_end":
 				case "agent_settled":
@@ -333,6 +346,7 @@ export const useSessionStore = defineStore("session", {
 					// later prompt was rejected by pi ("streaming, specify streamingBehavior").
 					this.running = false;
 					this.speedSample = null;
+					this.notice = "";
 					this.refreshContextUsage();
 					return;
 				case "compaction_end":
@@ -499,6 +513,13 @@ export const useSessionStore = defineStore("session", {
 					this.followUpMode = String(data.followUpMode ?? this.followUpMode);
 					// Reconcile: the authoritative flag, so a missed event cannot wedge the composer.
 					if (typeof data.isStreaming === "boolean") this.running = data.isStreaming;
+					// A tool run we can no longer observe must not keep claiming it is running
+					// (e.g. the page reloaded while a run was alive, or the child was restarted).
+					if (!this.running) {
+						for (const run of Object.values(this.tools)) {
+							if (run.status === "running") run.status = "unknown";
+						}
+					}
 					return;
 				}
 				case "get_messages": {
@@ -669,6 +690,37 @@ export const useSessionStore = defineStore("session", {
 		},
 
 		// ---- actions the UI calls ----
+		/**
+		 * Hydrate everything that belongs to a workspace (session, messages, stats, preview,
+		 * commands). Runs once per folder, on connect and whenever the active folder changes; with
+		 * no folder open there is nothing to ask for, and asking anyway would surface a spurious
+		 * "no workspace is open yet" error on a fresh install.
+		 */
+		hydrate(): void {
+			if (!this.cwd || this.hydratedFor === this.cwd) return;
+			this.hydratedFor = this.cwd;
+			this.send({ type: "get_state" });
+			this.send({ type: "list_sessions" });
+			this.send({ type: "preview_status" });
+			this.send({ type: "get_session_stats" });
+			// a reload must not lose the conversation: ask for the current messages
+			this.send({ type: "get_messages" });
+			this.send({ type: "get_commands" });
+		},
+
+		/** Dismiss the current notice (it is a transient statement, not a state). */
+		clearNotice(): void {
+			this.notice = "";
+		},
+
+		/** Switch the git sub-tab and load whatever that view needs (the panels do not self-load). */
+		setGitTab(tab: "changes" | "history" | "branches"): void {
+			this.gitTab = tab;
+			if (tab === "changes") this.refreshGit();
+			if (tab === "history") this.loadLog();
+			if (tab === "branches") this.loadBranches();
+		},
+
 		sendPrompt(text: string): void {
 			if (!text.trim()) return;
 			this.notice = "";
@@ -794,15 +846,19 @@ export const useSessionStore = defineStore("session", {
 				});
 		},
 
-		// ---- left sidebar: files ---------------------------------------------
-		/** Kept for compatibility with the panel code; the drawer is the single entry point. */
+		// ---- drawer entry points ---------------------------------------------
+		/** Files and the git sub-tabs have their own loaders; opening the drawer must fill it. */
 		openSidebar(tab: "files" | "changes" | "history" | "branches"): void {
-			this.drawer = this.drawer === tab ? "none" : tab;
-			this.sidebar = this.sidebar === tab ? "none" : tab;
-			if (this.sidebar === "files") this.ensureTree(this.cwd);
-			if (this.sidebar === "changes") this.refreshGit();
-			if (this.sidebar === "history") this.loadLog();
-			if (this.sidebar === "branches") this.loadBranches();
+			const opensGit = tab !== "files";
+			if (opensGit) this.gitTab = tab;
+			const target = opensGit ? "git" : "files";
+			this.drawer = this.drawer === target ? "none" : target;
+			if (this.drawer === "files") this.ensureTree(this.cwd);
+			if (this.drawer === "git") {
+				this.refreshGit();
+				if (this.gitTab === "history") this.loadLog();
+				if (this.gitTab === "branches") this.loadBranches();
+			}
 		},
 		ensureTree(dir: string): void {
 			if (this.treeChildren[dir]) return;

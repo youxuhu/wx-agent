@@ -14,7 +14,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, rename, stat, writeFile } from "node:fs/promises";
 import { readFile as readJsonFile, writeFile as writeJsonFile } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,8 @@ let distDir = join(projectRoot, "dist");
 interface Args {
 	port: number;
 	host: string;
-	cwd: string;
+	/** Optional: without it the service starts with no workspace (see the startup block). */
+	cwd?: string;
 	piBin: string;
 	/** Optional node binary + script pair, for builds without a `pi` command on PATH. */
 	piNode?: string;
@@ -47,7 +48,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-	const args: Args = { port: 7799, host: "127.0.0.1", cwd: process.cwd(), piBin: "pi" };
+	const args: Args = { port: 7799, host: "127.0.0.1", piBin: "pi" };
 	for (let i = 0; i < argv.length; i += 1) {
 		const key = argv[i];
 		const value = argv[i + 1];
@@ -623,6 +624,16 @@ function main(): void {
 
 	const broadcastWorkspaces = (): void => broadcast(workspacesPayload());
 
+	/** The folder that was active when this agent dir was last written (see saveRecent). */
+	function rememberedWorkspace(dir: string): string | null {
+		try {
+			const parsed = JSON.parse(readFileSync(join(dir, "piwebui-workspaces.json"), "utf8")) as { active?: unknown };
+			return typeof parsed.active === "string" && parsed.active ? parsed.active : null;
+		} catch {
+			return null;
+		}
+	}
+
 	async function saveRecent(): Promise<void> {
 		try {
 			await writeJsonFile(join(agentDir, "piwebui-workspaces.json"), JSON.stringify({ recent, active: activeKey }, null, 2), "utf8");
@@ -866,14 +877,34 @@ function main(): void {
 		}
 	}
 
-	// The initial workspace is created synchronously so the first request has an answer.
-	try {
-		const initialKey = realpathSync(args.cwd);
-		activeKey = initialKey;
-		void ensureWorkspace(initialKey).catch((error: unknown) => console.error(`workspace failed: ${String(error)}`));
-	} catch (error) {
-		console.error(`refusing to start: --cwd ${args.cwd} is not usable (${String(error)})`);
-		process.exit(2);
+	/**
+	 * Startup workspace. An explicit `--cwd` wins (development, probes, scripts). Without it the
+	 * service reopens the folder that was active when this agent dir last stopped — and on a
+	 * first run, when there is nothing remembered, it opens *nothing*: silently picking a
+	 * directory (a home folder, a process cwd) would start a session in a place the user never
+	 * chose. The UI then asks for a folder.
+	 */
+	if (args.cwd) {
+		try {
+			activeKey = realpathSync(args.cwd);
+		} catch (error) {
+			console.error(`refusing to start: --cwd ${args.cwd} is not usable (${String(error)})`);
+			process.exit(2);
+		}
+	} else {
+		const remembered = rememberedWorkspace(agentDir);
+		if (remembered) {
+			try {
+				activeKey = realpathSync(remembered);
+			} catch (error) {
+				console.error(`ignoring remembered workspace ${remembered} (${String(error)})`);
+				activeKey = null;
+			}
+		}
+	}
+	if (activeKey) {
+		// Created synchronously so the first request has an answer.
+		void ensureWorkspace(activeKey).catch((error: unknown) => console.error(`workspace failed: ${String(error)})`));
 	}
 
 	void loadRecent().then(() => broadcastWorkspaces());
@@ -881,7 +912,7 @@ function main(): void {
 	server.listen(args.port, args.host, () => {
 		const address = server.address();
 		const port = typeof address === "object" && address ? address.port : args.port;
-		console.log(`pi web ui on http://${args.host}:${port} (workspace ${activeKey}, model ${args.model ?? "pi default"})`);
+		console.log(`pi web ui on http://${args.host}:${port} (workspace ${activeKey ?? "none — waiting for the UI to open one"}, model ${args.model ?? "pi default"})`);
 		// Machine-readable handshake for a desktop shell (it passes 0 and lets the OS pick a
 		// port). Humans can ignore this line.
 		console.log(JSON.stringify({ type: "piwebui-ready", host: args.host, port }));

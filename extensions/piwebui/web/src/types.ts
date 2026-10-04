@@ -6,7 +6,8 @@ export interface ToolRun {
 	args?: unknown;
 	output: string;
 	partial: string;
-	status: "running" | "done" | "error";
+	/** `unknown` = we have no observable record (e.g. the run predates this page load). */
+	status: "running" | "done" | "error" | "unknown";
 	startedAt: number;
 	endedAt?: number;
 }
@@ -14,7 +15,7 @@ export interface ToolRun {
 export type Block =
 	| { kind: "text"; text: string }
 	| { kind: "thinking"; text: string }
-	| { kind: "tool"; toolCallId: string };
+	| { kind: "tool"; toolCallId: string; toolName?: string };
 
 export interface ChatMessage {
 	id: string;
@@ -74,7 +75,15 @@ export function messageToBlocks(message: unknown): Block[] {
 	if (!Array.isArray(content)) return [];
 	const blocks: Block[] = [];
 	for (const part of content) {
-		const block = part as { type?: string; text?: string; thinking?: string; id?: string; toolCallId?: string };
+		const block = part as {
+		type?: string;
+		text?: string;
+		thinking?: string;
+		id?: string;
+		name?: string;
+		toolCallId?: string;
+		toolName?: string;
+	};
 		switch (block?.type) {
 			case "text":
 				if (block.text) blocks.push({ kind: "text", text: block.text });
@@ -85,7 +94,9 @@ export function messageToBlocks(message: unknown): Block[] {
 			case "toolCall":
 			case "tool_call": {
 				const toolCallId = block.toolCallId ?? block.id;
-				if (toolCallId) blocks.push({ kind: "tool", toolCallId });
+				// The name is on the wire too; keeping it lets history render a real name.
+				const toolName = block.name ?? block.toolName;
+				if (toolCallId) blocks.push({ kind: "tool", toolCallId, ...(toolName ? { toolName } : {}) });
 				break;
 			}
 			default:

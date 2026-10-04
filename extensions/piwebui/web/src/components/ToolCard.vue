@@ -3,11 +3,15 @@
 import { computed, ref } from "vue";
 import type { ToolRun } from "../types.ts";
 
-const props = defineProps<{ run?: ToolRun }>();
+const props = defineProps<{ run?: ToolRun; fallbackName?: string }>();
 const open = ref(false);
 
-const name = computed(() => props.run?.toolName ?? "tool");
-const status = computed(() => props.run?.status ?? "running");
+const name = computed(() => props.run?.toolName ?? props.fallbackName ?? "tool");
+/**
+ * Without a live run record we have no status at all — after a reload the run cannot be observed
+ * anymore, so the card states `unknown` instead of pretending the tool is still running.
+ */
+const status = computed(() => props.run?.status ?? "unknown");
 const duration = computed(() => {
 	const run = props.run;
 	if (!run?.endedAt || !run.startedAt) return "";
@@ -29,7 +33,7 @@ const output = computed(() => props.run?.output ?? "");
 		<div class="tool-head" @click="open = !open">
 			<span class="caret faint">{{ open ? "▾" : "▸" }}</span>
 			<span class="name">{{ name }}</span>
-			<span class="chip" :class="status === 'error' ? 'chip-danger' : status === 'done' ? '' : 'chip-warn'">{{ status }}</span>
+			<span class="chip" :class="status === 'error' ? 'chip-danger' : status === 'running' ? 'chip-warn' : ''">{{ status }}</span>
 			<span v-if="duration" class="faint tiny">{{ duration }}</span>
 			<span class="dim small ellipsis spacer">{{ summary }}</span>
 		</div>

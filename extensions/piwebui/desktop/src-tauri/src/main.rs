@@ -44,7 +44,7 @@ fn wait_for_port(stdout: impl std::io::Read, timeout: std::time::Duration) -> Re
     Err("service exited before reporting a port".to_string())
 }
 
-fn start_service(resources: &PathBuf, agent_home: &str) -> Result<(Child, u16), String> {
+fn start_service(resources: &PathBuf) -> Result<(Child, u16), String> {
     let node = resources.join("node");
     let server = resources.join("server.mjs");
     let pi_script = resources.join("pi/dist/bundle/cli.js");
@@ -69,8 +69,6 @@ fn start_service(resources: &PathBuf, agent_home: &str) -> Result<(Child, u16), 
         .arg("0") // let the OS pick a free port; we read it back from the readiness line
         .arg("--host")
         .arg("127.0.0.1")
-        .arg("--cwd")
-        .arg(agent_home)
         .arg("--pi-node")
         .arg(&node)
         .arg("--pi-script")
@@ -103,8 +101,7 @@ fn main() {
                 .path()
                 .resource_dir()
                 .map_err(|error| format!("no resource dir: {error}"))?;
-            let agent_home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            std::thread::spawn(move || match start_service(&resources, &agent_home) {
+            std::thread::spawn(move || match start_service(&resources) {
                 Ok((child, port)) => {
                     let url = format!("http://127.0.0.1:{port}/");
                     println!("[shell] service ready on {url}");

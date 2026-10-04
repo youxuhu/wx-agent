@@ -200,6 +200,8 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 ### 验收
 
+桌面版重装步骤（app 必须先关掉）见 `MAINTENANCE.md`。
+
 `npm run typecheck` 用 **vue-tsc**（模板也查类型）；离线探针 `probe/message-probe.ts` 覆盖消息块渲染。
 
 `node probe/control-probe.ts` → **21/21**：命令枚举与执行（`disposition: "handled"`）、模型/思考等级、设置往返、会话统计/树/fork 点/最后助手文本、`bash` 真执行 + 流式事件、未知命令与缺字段拒绝、配置白名单/JSON 校验/原子写 + `.bak`、`auth.json` 不暴露。
@@ -269,6 +271,8 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 
 ## 验收
 
+桌面版重装步骤（app 必须先关掉）见 `MAINTENANCE.md`。
+
 `npm run typecheck` 用 **vue-tsc**（模板也查类型）；离线探针 `probe/message-probe.ts` 覆盖消息块渲染。
 
 八个探针，共 **108 项**（都需要服务在对应端口运行）：
@@ -285,6 +289,12 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 | `markdown-probe.ts`（离线） | 标题/粗斜体/行内代码/围栏块/嵌套列表/引用/表格/链接渲染 + `<script>`、`<img onerror>`、`javascript:` 三种注入样本被中和 | 13/13 |
 
 `node probe/preview-probe.ts`（需先按上面用法起服务）会真实起一个 dev server 并核对：无上游时拒绝、就绪判定、HTML/CSS 改写与脚本注入、CSP 放宽事实、JS 透传、`/__file/` 只读与越界拒绝、`stop` 后进程组确实消失。当前 **17/17 通过**。
+
+## 目录与界面结构
+
+- **目录是唯一的入口**：顶栏左侧那个按钮（显示当前目录，长路径中间省略、`…` 标明是省略）负责打开 / 切换 / 关闭目录与最近目录；侧栏只负责会话，不再重复一个 "Open folder…"。**没有任何目录时**界面进入空态（"No folder open"）并请你自己选一个 —— 首次启动不会替你挑目录。
+- 目录记忆：`piwebui-workspaces.json` 里的 `active` 是"退出时开着的目录"，下次启动会打开它；想回到"让你自己选"就把这个文件移开。
+- 右侧抽屉：`Files` · `Git`（内含 `Changes` / `History` / `Branches` 分页）· `Preview` · `Settings`。会话列表在左侧栏。
 
 ## 运行状态与错误显示
 
