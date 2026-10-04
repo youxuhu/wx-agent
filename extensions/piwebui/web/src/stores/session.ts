@@ -94,6 +94,8 @@ export const useSessionStore = defineStore("session", {
 		 * drawer instead of three peers of Files and Settings in the top bar.
 		 */
 		gitTab: "changes" as "changes" | "history" | "branches",
+		/** Settings has one subject per view instead of one long page. */
+		settingsTab: "model" as "model" | "credentials" | "commands" | "session" | "config",
 		showControl: false,
 		controlTab: "commands" as string,
 		commands: [] as CommandInfo[],
@@ -737,6 +739,16 @@ export const useSessionStore = defineStore("session", {
 		deleteSession(path: string): void {
 			this.sessionDeletePending = null;
 			this.send({ type: "delete_session", path, confirmed: true });
+		},
+
+		/** Switch a settings view, loading whatever that view needs. */
+		setSettingsTab(tab: "model" | "credentials" | "commands" | "session" | "config"): void {
+			this.settingsTab = tab;
+			if (tab === "model" && !this.models.length) this.requestModels();
+			if (tab === "commands" && !this.commands.length) this.requestCommands();
+			if (tab === "credentials") this.loadAuth();
+			if (tab === "session") this.listSessions();
+			if (tab === "config" && !this.configFiles.length) this.loadConfigFiles();
 		},
 
 		/** Switch the git sub-tab and load whatever that view needs (the panels do not self-load). */

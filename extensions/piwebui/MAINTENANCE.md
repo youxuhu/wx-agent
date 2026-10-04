@@ -97,6 +97,7 @@ npm run desktop:build    # 出 .app + .dmg
 | `probe/disconnect-probe.ts` | :7801 + 测试 agentDir | 审批断线：仍挂起、不自动放行、无副作用、重连仍收到、拒绝后没执行 | 7/7 |
 | `probe/markdown-probe.ts` | 无（离线） | 渲染各构件 + `<script>`/`<img onerror>`/`javascript:` 三种注入被中和 | 13/13 |
 | `probe/health-probe.ts` | 无（离线） | 健康指示 9 种状态映射与优先级 | 9/9 |
+| `probe/session-delete-probe.ts` | 无（离线 + 自己起服务，端口 0） | 会话删除：目录内 `.jsonl` 才可删、目录外/非 session/穿越路径被拒、**当前打开的会话被拒**、协议必须带 `confirmed: true`、删除后列表刷新 | 11/11 |
 | `probe/tool-probe.ts` | 无（离线，含真实 `get_messages` 抓包） | 工具卡输入输出：从 assistant 的 `toolCall.arguments` 取输入、从 `role:"toolResult"` 消息取输出、`isError`→`error`、无结果的中断调用保持 `unknown`、图片结果降级为 `[image]`、历史不编造耗时 | 12/12 |
 | `probe/path-probe.ts` | 无（离线） | 顶栏路径显示：短路径原样、长路径保留根与末两段并带 `…`、空目录返回空串（由调用方给提示） | 8/8 |
 | `probe/no-workspace-probe.ts` | 无（自己起服务，端口 0） | 首启语义：没有 `--cwd` 时**不自动开目录**（`active=null`）、`/api/sessions` 409、prompt 被明确拒绝、开目录后成为 active、重启记住上次选的目录 | 7/7 |
@@ -154,6 +155,12 @@ npm run desktop:build    # 出 .app + .dmg
 - 实时路径同理：`tool_execution_update.partialResult` 是流式片段，`tool_execution_end.result.content` 是最终结果；`content` 为空时要退回 `structuredContent`（有些工具只给结构化数据）。
 - 状态语义：`done` / `error` 来自真实结果；**没有结果的调用（中断、页面刷新前发生）必须显示 `unknown`**，不能假装还在跑。
 - 长输入/输出：保留尾部 20000 字符并**明确写出丢了多少**（不静默截断）。
+
+## 6.10 Shell 抽屉与会话删除
+
+- Shell 是独立抽屉（`ShellPanel.vue`，在 Git 右侧），**不是一个表单**：有 scrollback（每条命令回显 + 自己的输出 + 该次的事实）、底部输入、↑/↓ 历史、Esc 停止。它仍然走 pi 的 `bash` 命令，所以单写者规则与 `exclude from context` 语义不变。
+- 会话删除是**两步**（`confirmDeleteSession` → `deleteSession`），并且服务端二次校验：必须是本 workspace 会话目录里的 `.jsonl`，且**不能是当前打开的那个**（pi 正持有该文件）。协议层还要求 `confirmed: true`。
+- 用 `--no-remember` 跑临时实例/探针：否则它们会把 `piwebui-workspaces.json` 里的"上次目录"覆盖成探针目录（真实用户下次启动会莫名进到 `/tmp/...`）。
 
 ## 7. 故障排查
 

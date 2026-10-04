@@ -1,7 +1,10 @@
 <script setup lang="ts">
 /**
- * Settings drawer: model / thinking / behaviour, discoverable commands, session tools, shell
- * and the allowlisted config files. Every button is a real RPC command or HTTP endpoint.
+ * Settings drawer.
+ *
+ * Everything here used to be one long page; it is now grouped into secondary tabs (Model,
+ * Credentials, Commands, Session, Config) so each view holds one subject. Every button is a real
+ * RPC command or HTTP endpoint — nothing here is decorative.
  */
 import { computed, nextTick, onMounted, ref } from "vue";
 import { useSessionStore } from "../stores/session.ts";
@@ -91,6 +94,7 @@ onMounted(() => {
 
 <template>
 	<div class="pane">
+		<template v-if="store.settingsTab === 'model'">
 		<!-- model & behaviour -->
 		<h4>Model</h4>
 		<div class="row">
@@ -121,6 +125,31 @@ onMounted(() => {
 			</button>
 		</div>
 
+		<h4>Default model</h4>
+		<p class="fact tiny">Written to <code>settings.json</code> (<code>defaultProvider</code> / <code>defaultModel</code>); new sessions pick it up.</p>
+		<div class="row-nowrap">
+			<input v-model="defaultProvider" class="field" placeholder="provider, e.g. deepseek" />
+			<input v-model="defaultModel" class="field" placeholder="model, e.g. deepseek-flash" />
+			<button class="btn btn-sm" @click="store.applyDefaultModel(defaultProvider, defaultModel)">Save defaults</button>
+			<button class="btn btn-sm btn-ghost" @click="loadDefaults()">Load current</button>
+		</div>
+		<p v-if="store.defaultModelStatus" class="fact">{{ store.defaultModelStatus }}</p>
+
+		<details>
+			<summary class="tiny dim">available models ({{ store.models.length }})</summary>
+			<button class="btn btn-sm" @click="store.requestModels()">Reload models</button>
+			<div class="list" style="max-height: 30vh">
+				<div v-for="model in store.models" :key="`${model.provider}/${model.id}`" class="list-row clickable" @click="store.setModel(model.provider, model.id)">
+					<span class="mono tiny">{{ model.provider }}/{{ model.id }}</span>
+					<span class="tiny faint ellipsis">{{ model.name || "" }}</span>
+				</div>
+			</div>
+		</details>
+
+		</template>
+
+		<template v-if="store.settingsTab === 'credentials'">
+
 		<h4>Providers &amp; credentials</h4>
 		<p class="fact tiny">
 			Equivalent of the terminal's <code>/login</code> for API keys: set or rotate a key here, or remove one. Values are
@@ -149,26 +178,9 @@ onMounted(() => {
 		<p v-if="store.authStatus" class="fact">{{ store.authStatus }}</p>
 		<p v-if="store.authNote" class="fact tiny faint">{{ store.authNote }}</p>
 
-		<h4>Default model</h4>
-		<p class="fact tiny">Written to <code>settings.json</code> (<code>defaultProvider</code> / <code>defaultModel</code>); new sessions pick it up.</p>
-		<div class="row-nowrap">
-			<input v-model="defaultProvider" class="field" placeholder="provider, e.g. deepseek" />
-			<input v-model="defaultModel" class="field" placeholder="model, e.g. deepseek-flash" />
-			<button class="btn btn-sm" @click="store.applyDefaultModel(defaultProvider, defaultModel)">Save defaults</button>
-			<button class="btn btn-sm btn-ghost" @click="loadDefaults()">Load current</button>
-		</div>
-		<p v-if="store.defaultModelStatus" class="fact">{{ store.defaultModelStatus }}</p>
+		</template>
 
-		<details>
-			<summary class="tiny dim">available models ({{ store.models.length }})</summary>
-			<button class="btn btn-sm" @click="store.requestModels()">Reload models</button>
-			<div class="list" style="max-height: 30vh">
-				<div v-for="model in store.models" :key="`${model.provider}/${model.id}`" class="list-row clickable" @click="store.setModel(model.provider, model.id)">
-					<span class="mono tiny">{{ model.provider }}/{{ model.id }}</span>
-					<span class="tiny faint ellipsis">{{ model.name || "" }}</span>
-				</div>
-			</div>
-		</details>
+		<template v-if="store.settingsTab === 'commands'">
 
 		<!-- commands -->
 		<h4>Commands · {{ store.commands.length }}</h4>
@@ -192,6 +204,10 @@ onMounted(() => {
 				<span class="tiny faint ellipsis">{{ command.description || "" }}</span>
 			</div>
 		</div>
+
+		</template>
+
+		<template v-if="store.settingsTab === 'session'">
 
 		<!-- sessions -->
 		<h4>Sessions</h4>
@@ -251,6 +267,10 @@ onMounted(() => {
 			<pre class="code-block">{{ store.lastAssistantText }}</pre>
 		</div>
 
+		</template>
+
+		<template v-if="store.settingsTab === 'config'">
+
 		<!-- config -->
 		<h4>Config files</h4>
 		<p class="fact tiny">Only the allowlist is readable and writable; <code>auth.json</code> is never exposed. Saves validate JSON, keep the previous content as <code>.bak</code>, and need <code>/reload</code> (or a restart) to take effect.</p>
@@ -272,5 +292,6 @@ onMounted(() => {
 			<span class="tiny faint">{{ store.configDraft.length }} chars</span>
 		</div>
 		<p v-if="store.configStatus" class="fact">{{ store.configStatus }}</p>
+		</template>
 	</div>
 </template>

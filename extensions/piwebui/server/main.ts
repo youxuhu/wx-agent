@@ -45,6 +45,8 @@ interface Args {
 	webDir?: string;
 	model?: string;
 	thinking?: string;
+	/** Do not persist the active folder (probes and scratch instances must not clobber it). */
+	noRemember?: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -62,6 +64,7 @@ function parseArgs(argv: string[]): Args {
 		else if (key === "--web-dir" && value) args.webDir = resolve(value);
 		else if (key === "--model" && value) args.model = value;
 		else if (key === "--thinking" && value) args.thinking = value;
+		else if (key === "--no-remember") args.noRemember = true;
 	}
 	return args;
 }
@@ -635,6 +638,8 @@ function main(): void {
 	}
 
 	async function saveRecent(): Promise<void> {
+		// A scratch instance (`--no-remember`) must not overwrite the folder a real user last used.
+		if (args.noRemember) return;
 		try {
 			await writeJsonFile(join(agentDir, "piwebui-workspaces.json"), JSON.stringify({ recent, active: activeKey }, null, 2), "utf8");
 		} catch {

@@ -81,6 +81,15 @@ const health = computed(() =>
 	healthOf({ conn: store.conn, piState: store.piState, exitInfo: store.exitInfo, reconnectIn: store.reconnectIn }),
 );
 
+/** Drawer headings are proper names, not the internal keys. */
+const DRAWER_TITLES: Record<string, string> = {
+	files: "Files",
+	git: "Git",
+	shell: "Shell",
+	preview: "Preview",
+	settings: "Settings",
+};
+
 const TABS = [
 	{ key: "files", label: "Files" },
 	// Changes / History / Branches are all git; they are sub-tabs inside this drawer, not three
@@ -90,6 +99,14 @@ const TABS = [
 	{ key: "shell", label: "Shell" },
 	{ key: "preview", label: "Preview" },
 	{ key: "settings", label: "Settings" },
+] as const;
+
+const SETTINGS_TABS = [
+	{ key: "model", label: "Model" },
+	{ key: "credentials", label: "Credentials" },
+	{ key: "commands", label: "Commands" },
+	{ key: "session", label: "Session" },
+	{ key: "config", label: "Config" },
 ] as const;
 
 const GIT_TABS = [
@@ -107,6 +124,7 @@ function toggleDrawer(key: string): void {
 	store.drawer = store.drawer === key ? "none" : (key as typeof store.drawer);
 	if (store.drawer === "files") store.loadTree(store.cwd);
 	if (store.drawer === "git") store.refreshGit();
+	if (store.drawer === "settings") store.setSettingsTab(store.settingsTab);
 }
 
 /** Deep links: `?dir=` opens a workspace, `?file=` shows one file in the files drawer. */
@@ -264,9 +282,20 @@ onMounted(() => {
 					@keydown="onResizeKey"
 				/>
 				<div class="drawer-head">
-					<strong class="small">{{ store.drawer === "git" ? "Git" : store.drawer === "shell" ? "Shell" : store.drawer }}</strong>
+					<strong class="small">{{ DRAWER_TITLES[store.drawer] ?? store.drawer }}</strong>
 					<span class="spacer" />
 					<button class="btn btn-ghost btn-sm" @click="store.drawer = 'none'">×</button>
+				</div>
+				<div v-if="store.drawer === 'settings'" class="subtabs">
+					<button
+						v-for="tab in SETTINGS_TABS"
+						:key="tab.key"
+						class="tab tab-sm"
+						:class="{ active: store.settingsTab === tab.key }"
+						@click="store.setSettingsTab(tab.key)"
+					>
+						{{ tab.label }}
+					</button>
 				</div>
 				<div v-if="store.drawer === 'git'" class="subtabs">
 					<button
