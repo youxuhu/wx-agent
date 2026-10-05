@@ -29,7 +29,9 @@ interface NotifyConfig {
 	events: ("settled" | "waiting")[];
 }
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "notify.json");
+/** Honours PI_CODING_AGENT_DIR so test instances do not write into the real agent directory. */
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+const CONFIG_PATH = join(AGENT_DIR, "notify.json");
 const SOUNDS_DIR = "/System/Library/Sounds";
 
 function soundList(): string[] {

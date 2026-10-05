@@ -21,9 +21,11 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { PiRpcChild, type RpcRecord, type UiRequest } from "./rpc.ts";
 import { deleteSession, isSessionPathOf, listSessions } from "./sessions.ts";
-import { FILE_PREFIX, PROXY_PREFIX, filePreview, proxyRequest } from "./preview.ts";
+import { FILE_PREFIX, PROXY_PREFIX, filePreview, proxyRequest, proxyUpgrade, tunnelFacts } from "./preview.ts";
+import { CHECKPOINT_WINDOW, readCheckpoints } from "./checkpoints.ts";
+import { repoRoot } from "./git.ts";
 import { Workspace, workspaceKey } from "./workspace.ts";
-import { browse, listDir, readText } from "./fs.ts";
+import { browse, listDir, readText, writeFileSafe } from "./fs.ts";
 import { listAuth, removeProvider, setApiKey } from "./auth.ts";
 import * as git from "./git.ts";
 
@@ -145,20 +147,6 @@ const RPC_PASSTHROUGH: Record<string, { fields: string[]; required?: string[]; w
 };
 
 /** Commands reachable through `prompt` that change state (everything else is read-only). */
-const WRITE_TYPES = new Set([
-	"prompt",
-	"steer",
-	"follow_up",
-	"abort",
-	"clear_queue",
-	"new_session",
-	"switch_session",
-	"set_session_name",
-	"compact",
-	"dev_start",
-	"dev_stop",
-]);
-
 /**
  * Config files the web UI may read and write. Credentials (auth.json), caches and
  * dependency manifests are deliberately excluded.
@@ -216,6 +204,9 @@ function main(): void {
 	const workspaces = new Map<string, Workspace>();
 	/** The one workspace allowed to accept write commands (single writer). */
 	let activeKey: string | null = null;
+	/** Connected tabs, so a write can be attributed to the tab that made it. */
+	const clientIds = new WeakMap<WebSocket, string>();
+	let clientSeq = 0;
 	/** Recently opened directories, newest first. */
 	let recent: string[] = [];
 
@@ -227,7 +218,32 @@ function main(): void {
 			if (requested) return workspaces.get(requested) ?? null;
 			return activeKey ? (workspaces.get(activeKey) ?? null) : null;
 		};
-		const fail = (code: number, message: string): void => {
+		/** Read a request body with a hard cap; throws instead of buffering without limit. */
+function readJsonBody(req: IncomingMessage, limit: number): Promise<Record<string, unknown>> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		let size = 0;
+		req.on("data", (chunk: Buffer) => {
+			size += chunk.length;
+			if (size > limit) {
+				reject(new Error(`body is larger than ${limit} bytes`));
+				req.destroy();
+				return;
+			}
+			chunks.push(chunk);
+		});
+		req.on("end", () => {
+			try {
+				resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, unknown>);
+			} catch (error) {
+				reject(error instanceof Error ? error : new Error(String(error)));
+			}
+		});
+		req.on("error", reject);
+	});
+}
+
+const fail = (code: number, message: string): void => {
 			if (res.headersSent) {
 				res.end();
 				return;
@@ -289,6 +305,29 @@ function main(): void {
 			const workspace = wsFor();
 			if (!workspace) return fail(409, `no workspace is active yet`);
 			const path = url.searchParams.get("path") ?? "";
+			if (req.method === "PUT") {
+				// Editing a real file: the body is bounded, and the write itself is guarded in fs.ts
+				// (containment, text-only, optimistic concurrency, atomic replace).
+				void readJsonBody(req, 4 * 1024 * 1024)
+					.then((body) =>
+						writeFileSafe(workspace.cwd, path, {
+							content: typeof body.content === "string" ? body.content : "",
+							expectedMtimeMs: typeof body.expectedMtimeMs === "number" ? body.expectedMtimeMs : undefined,
+							expectedSize: typeof body.expectedSize === "number" ? body.expectedSize : undefined,
+						}),
+					)
+					.then((outcome) => {
+						if ("error" in outcome) {
+							res.writeHead(outcome.status, { "content-type": "application/json" });
+							res.end(JSON.stringify({ error: outcome.error }));
+							return;
+						}
+						res.writeHead(200, { "content-type": "application/json" });
+						res.end(JSON.stringify(outcome));
+					})
+					.catch((error: unknown) => fail(400, `write: ${error instanceof Error ? error.message : String(error)}`));
+				return;
+			}
 			void readText(workspace.cwd, path)
 				.then((result) => {
 					if (typeof result === "string") {
@@ -522,6 +561,20 @@ function main(): void {
 			return;
 		}
 
+		if (url.pathname === "/api/checkpoints") {
+			const workspace = wsFor();
+			if (!workspace) return fail(409, "no workspace is active yet");
+			// The extension keys its index by the git top level, not by the folder we happen to sit in.
+			void repoRoot(workspace.cwd)
+				.then((repo) => {
+					const listing = readCheckpoints(agentDir, repo);
+					res.writeHead(200, { "content-type": "application/json" });
+					res.end(JSON.stringify({ ...listing, workspace: workspace.cwd, window: CHECKPOINT_WINDOW }));
+				})
+				.catch((error: unknown) => fail(500, `checkpoints: ${String(error)}`));
+			return;
+		}
+
 		if (url.pathname === PROXY_PREFIX || url.pathname.startsWith(`${PROXY_PREFIX}/`)) {
 			const workspace = wsFor();
 			const status = workspace?.getPreviewStatus() ?? null;
@@ -546,7 +599,32 @@ function main(): void {
 		void serveStatic(url.pathname, res);
 	});
 
-	const wss = new WebSocketServer({ server, path: "/ws" });
+	const wss = new WebSocketServer({ noServer: true });
+
+	/**
+	 * Upgrade routing. `ws` would answer 400 for any path other than `/ws`, so the server keeps
+	 * `noServer` and decides here: the app socket, a preview websocket tunnel (HMR), or nothing.
+	 */
+	server.on("upgrade", (req, socket, head) => {
+		const raw = req.url ?? "";
+		const pathname = raw.split("?")[0] ?? "";
+		if (pathname === "/ws") {
+			wss.handleUpgrade(req, socket, head, (client) => wss.emit("connection", client, req));
+			return;
+		}
+		if (pathname === PROXY_PREFIX || pathname.startsWith(`${PROXY_PREFIX}/`)) {
+			const workspace = activeKey ? workspaces.get(activeKey) : undefined;
+			const status = workspace?.getPreviewStatus() ?? null;
+			if (!status?.port) {
+				socket.write("HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\nx-piwebui-upstream-error: none\r\n\r\n");
+				socket.destroy();
+				return;
+			}
+			proxyUpgrade(req, socket, head, { upstreamHost: "127.0.0.1", upstreamPort: status.port });
+			return;
+		}
+		socket.destroy();
+	});
 
 	const broadcast = (message: unknown, workspace?: Workspace | null): void => {
 		const payload = JSON.stringify(workspace ? { ...(message as object), workspace: workspace.cwd } : message);
@@ -565,6 +643,8 @@ function main(): void {
 		},
 		proxyPrefix: PROXY_PREFIX,
 		filePrefix: FILE_PREFIX,
+		/** Whether hot updates can reach the page: the websocket tunnel, as observed. */
+		tunnels: tunnelFacts(),
 	});
 
 	/** Create (or reuse) the workspace for a directory. */
@@ -606,8 +686,30 @@ function main(): void {
 
 	const workspaceByCwd = (cwd: string): Workspace | null => workspaces.get(cwd) ?? null;
 
+	/**
+	 * One writer per workspace, at *tab* granularity.
+	 *
+	 * The active-workspace rule says which workspace may be written; this says which tab may write
+	 * it. Reads are never gated, the first tab to write claims the pen (no ceremony for the common
+	 * single-tab case), and a tab that loses it is told instead of silently failing later on.
+	 */
+	const writers = new Map<string, { clientId: string; socket: WebSocket; since: string }>();
+
+	const publishWriter = (key: string): void => {
+		const holder = writers.get(key);
+		broadcast({ type: "writer_state", workspace: key, holder: holder?.clientId ?? null, since: holder?.since ?? null });
+	};
+
+	/** Shown to a tab that is not the writer: who holds the pen, and for how long. */
+	const writerBlocker = (key: string, clientId: string): string => {
+		const holder = writers.get(key);
+		return holder
+			? `refused: tab ${holder.clientId} has been operating on ${key} since ${holder.since}; this tab is ${clientId} — claim_writer {force:true} takes over`
+			: "";
+	};
+
 	/** Read-only commands may target any workspace; writes only the active one. */
-	const resolve = (message: Record<string, unknown>, socket: WebSocket, write: boolean): Workspace | null => {
+	const resolve = (message: Record<string, unknown>, socket: WebSocket, write: boolean, lease = write): Workspace | null => {
 		const requested = typeof message.workspace === "string" && message.workspace ? message.workspace : activeKey;
 		if (!requested) {
 			socket.send(JSON.stringify({ type: "error", message: "no workspace is open yet" }));
@@ -626,6 +728,18 @@ function main(): void {
 				}),
 			);
 			return null;
+		}
+		if (lease) {
+			// Tab-level lease: whoever writes first holds the pen until it is released or taken over.
+			const clientId = clientIds.get(socket) ?? "unknown";
+			const holder = writers.get(workspace.cwd);
+			if (!holder) {
+				writers.set(workspace.cwd, { clientId, socket, since: new Date().toISOString() });
+				publishWriter(workspace.cwd);
+			} else if (holder.socket !== socket) {
+				socket.send(JSON.stringify({ type: "error", code: "not-writer", message: writerBlocker(workspace.cwd, clientId) }));
+				return null;
+			}
 		}
 		return workspace;
 	};
@@ -670,10 +784,13 @@ function main(): void {
 	}
 
 	wss.on("connection", (socket: WebSocket) => {
+		const clientId = `tab-${++clientSeq}`;
+		clientIds.set(socket, clientId);
 		const workspace = activeKey ? workspaces.get(activeKey) : undefined;
 		socket.send(
 			JSON.stringify({
 				type: "hello",
+				clientId,
 				active: activeKey,
 				workspaces: [...workspaces.values()].map((item) => item.info(item.cwd === activeKey)),
 				recent,
@@ -682,8 +799,19 @@ function main(): void {
 				currentSessionPath: workspace?.currentSessionPath ?? null,
 				exitInfo: workspace?.child.getExitInfo() ?? null,
 				pendingUi: workspace ? [...workspace.pendingUi.values()] : [],
+				writer: activeKey ? { holder: writers.get(activeKey)?.clientId ?? null, since: writers.get(activeKey)?.since ?? null } : null,
 			}),
 		);
+
+		socket.on("close", () => {
+			// A closed tab must not keep the pen: the next writer takes it without ceremony.
+			for (const [key, holder] of writers) {
+				if (holder.socket === socket) {
+					writers.delete(key);
+					publishWriter(key);
+				}
+			}
+		});
 
 		socket.on("message", (raw) => {
 			let message: Record<string, unknown>;
@@ -869,7 +997,9 @@ function main(): void {
 				return;
 			}
 			case "pty_start": {
-				const workspace = resolve(message, socket, true);
+				// Attaching to the workspace's terminal is not a write: any tab may look at (and revive)
+				// the shared terminal without holding the pen — that is what reconnecting does.
+				const workspace = resolve(message, socket, true, false);
 				if (!workspace) return;
 				const cols = Number(message.cols ?? 100);
 				const rows = Number(message.rows ?? 30);
@@ -935,6 +1065,105 @@ function main(): void {
 						);
 					})
 					.catch((error: unknown) => broadcast({ type: "error", message: `delete_session: ${String(error)}` }, workspace));
+				return;
+			}
+			case "rewind": {
+				// The extension owns the restore and asks for its own confirmation, so we only forward
+				// the command it already understands — never a ref, never a git command of our own.
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				if (workspace.agentRunning) {
+					socket.send(JSON.stringify({ type: "error", code: "busy", message: "a run is active: rewind changes the working tree under it — wait for it to finish" }));
+					return;
+				}
+				const index = Number(message.index ?? 0);
+				if (!Number.isInteger(index) || index < 1 || index > CHECKPOINT_WINDOW) {
+					socket.send(JSON.stringify({ type: "error", message: `rewind needs index 1..${CHECKPOINT_WINDOW} (as listed)` }));
+					return;
+				}
+				void repoRoot(workspace.cwd).then((repo) => {
+					const listing = readCheckpoints(agentDir, repo);
+					const row = listing.rows.find((entry) => entry.index === index);
+					if (!row) {
+						socket.send(JSON.stringify({ type: "error", message: `no checkpoint #${index} for ${repo ?? "this workspace"} — refresh the list` }));
+						return;
+					}
+					const command = message.tree === true ? `/rewind ${index} --tree` : `/rewind ${index}`;
+					if (!workspace.child.prompt(command)) {
+						socket.send(JSON.stringify({ type: "error", message: "pi rpc child is not running" }));
+						return;
+					}
+					broadcast({ type: "rewind_sent", index, command, ref: row.shortRef, at: row.at, tree: message.tree === true }, workspace);
+				});
+				return;
+			}
+			case "reload_pi": {
+				// The browser's `/reload`: a fresh pi process with the same cwd and session. In-flight runs
+				// die with the process, so a live run needs an explicit confirmation.
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				if (workspace.agentRunning && message.confirmed !== true) {
+					socket.send(
+						JSON.stringify({
+							type: "error",
+							code: "needs-confirmation",
+							message: "a run is active: restarting pi stops it — send reload_pi {confirmed:true} to restart anyway",
+						}),
+					);
+					return;
+				}
+				const before = workspace.currentSessionPath;
+				const { resumed, pendingApprovals } = workspace.restartChild();
+				broadcast(
+					{
+						type: "pi_restarted",
+						resumed,
+						requested: before,
+						pendingApprovals,
+						state: workspace.child.getState(),
+					},
+					workspace,
+				);
+				return;
+			}
+			case "claim_writer": {
+				const workspace = resolve(message, socket, false);
+				if (!workspace) return;
+				const clientId = clientIds.get(socket) ?? "unknown";
+				const holder = writers.get(workspace.cwd);
+				if (!holder || holder.socket === socket) {
+					writers.set(workspace.cwd, { clientId, socket, since: new Date().toISOString() });
+					publishWriter(workspace.cwd);
+					return;
+				}
+				if (message.force !== true) {
+					// Taking the pen from another tab is explicit, never a side effect.
+					socket.send(JSON.stringify({ type: "error", code: "not-writer", message: writerBlocker(workspace.cwd, clientId) }));
+					return;
+				}
+				if (holder.socket.readyState === 1) {
+					holder.socket.send(JSON.stringify({ type: "writer_revoked", workspace: workspace.cwd, by: clientId }));
+				}
+				writers.set(workspace.cwd, { clientId, socket, since: new Date().toISOString() });
+				publishWriter(workspace.cwd);
+				return;
+			}
+			case "release_writer": {
+				const workspace = resolve(message, socket, false);
+				if (!workspace) return;
+				const holder = writers.get(workspace.cwd);
+				if (holder && holder.socket === socket) {
+					writers.delete(workspace.cwd);
+					publishWriter(workspace.cwd);
+				}
+				return;
+			}
+			case "clear_queue": {
+				// Takes back queued steering/follow-up text; the response carries it so the client can
+				// put it back into the input instead of dropping it (the TUI's Esc behaviour).
+				const workspace = resolve(message, socket, true);
+				if (!workspace) return;
+				workspace.child.command("clear_queue");
 				return;
 			}
 			case "set_session_name": {

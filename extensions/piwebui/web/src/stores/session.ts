@@ -14,6 +14,7 @@ import {
 	messageToBlocks,
 	messageToText,
 	type ChatMessage,
+	type CheckpointRow,
 	type CommandInfo,
 	type ConfigFile,
 	type ConnState,
@@ -52,9 +53,14 @@ export const useSessionStore = defineStore("session", {
 		cwd: "",
 		/** The workspace the current hydration belongs to (so it runs once per folder). */
 		hydratedFor: null as string | null,
-		/** A session row waiting for its second click (the deleting step). */
+		/** A row waiting for its second click (the deleting step). */
 		sessionDeletePending: null as string | null,
+		/** The restart control's armed state (two-step, so a stray click cannot stop a run). */
+		restartPending: false,
 		piState: "stopped" as string,
+		clientId: "" as string,
+		/** Which tab holds the pen for the active workspace (null = nobody has written yet). */
+		writer: null as null | { holder: string | null; since: string | null },
 		exitInfo: null as null | { code: number | null; signal: string | null; at: string },
 		messages: [] as ChatMessage[],
 		tools: {} as Record<string, ToolRun>,
@@ -69,6 +75,14 @@ export const useSessionStore = defineStore("session", {
 		speed: null as null | number,
 		queueSteering: 0,
 		queueFollowUp: 0,
+		/**
+		 * Queued messages we know about, with the kind pi confirmed. pi answers every prompt with how
+		 * it took it (`disposition`), and a queued message is consumed when it shows up as a user
+		 * message — so the count is derived from observed facts instead of guessing.
+		 */
+		queuedTexts: [] as Array<{ kind: "steer" | "followUp"; text: string }>,
+		/** Prompts sent while a run was active, in order (pi answers them in the same order). */
+		pendingPromptKinds: [] as Array<{ kind: "steer" | "followUp"; text: string }>,
 		status: {} as Record<string, string>,
 		sessions: [] as SessionSummary[],
 		currentSessionPath: null as string | null,
@@ -94,7 +108,12 @@ export const useSessionStore = defineStore("session", {
 		 */
 		gitTab: "changes" as "changes" | "history" | "branches",
 		/** Settings has one subject per view instead of one long page. */
-		settingsTab: "model" as "model" | "credentials" | "commands" | "session" | "config",
+		settingsTab: "model" as "model" | "credentials" | "commands" | "session" | "checkpoints" | "config",
+		/** Per-turn code checkpoints of the active workspace (read from the extension's index). */
+		checkpoints: [] as CheckpointRow[],
+		checkpointsNote: "" as string,
+		checkpointsRepo: null as string | null,
+		checkpointsWindow: 15,
 		showControl: false,
 		controlTab: "commands" as string,
 		commands: [] as CommandInfo[],
@@ -121,6 +140,8 @@ export const useSessionStore = defineStore("session", {
 		/** Bumped when the service reports a terminal with no history to replay (a restart). */
 		ptyFreshSeq: 0,
 		ptyState: null as null | { replay: string; droppedChars: number; cols: number; rows: number },
+		/** Text to place in a terminal as soon as it is up (typed, never executed for the user). */
+		pendingLoginText: "" as string,
 		authProviders: [] as Array<{ provider: string; kind: string; hasSecret: boolean; expires?: number }>,
 		authNote: "",
 		authStatus: "",
@@ -146,7 +167,12 @@ export const useSessionStore = defineStore("session", {
 		sidebar: "files" as "files" | "changes" | "history" | "branches" | "none",
 		treeChildren: {} as Record<string, DirEntry[]>,
 		treeExpanded: [] as string[],
-		fileView: null as null | { path: string; text: string; language: string | null; bytes: number },
+		fileView: null as null | { path: string; text: string; language: string | null; bytes: number; mtimeMs: number },
+		/** Editing state: the draft is only sent on save, and the read's mtime/size guard the write. */
+		fileEditing: false,
+		fileDraft: "" as string,
+		fileSaving: false,
+		fileSaveError: "" as string,
 		fileError: "",
 		showIgnoredFiles: false,
 
@@ -279,6 +305,12 @@ export const useSessionStore = defineStore("session", {
 					// `replay` empty + running means a *fresh* terminal: the panel must clear its screen
 					// instead of leaving the dead one's text behind.
 					this.ptyFreshSeq += payload.replay ? 0 : 1;
+					if (this.pendingLoginText && this.ptyRunning) {
+						// Typed, not executed: the user still decides when to press Enter (see startLoginTerminal).
+						const text = this.pendingLoginText;
+						this.pendingLoginText = "";
+						this.send({ type: "pty_input", data: text });
+					}
 					this.ptyState = {
 						replay: String(payload.replay ?? ""),
 						droppedChars: Number(payload.droppedChars ?? 0),
@@ -302,6 +334,8 @@ export const useSessionStore = defineStore("session", {
 				}
 				case "hello": {
 					this.cwd = String(payload.cwd ?? "");
+					this.clientId = String(payload.clientId ?? "");
+					this.writer = (payload.writer as typeof this.writer) ?? null;
 					this.workspaces = (payload.workspaces as WorkspaceInfo[] | undefined) ?? [];
 					this.activeWorkspace = (payload.active as string | null) ?? null;
 					this.recentWorkspaces = (payload.recent as string[] | undefined) ?? [];
@@ -312,6 +346,46 @@ export const useSessionStore = defineStore("session", {
 					this.exitInfo = (payload.exitInfo as typeof this.exitInfo) ?? null;
 					const pending = (payload.pendingUi as UiRequest[] | undefined) ?? [];
 					this.pendingUi = pending;
+					return;
+				}
+				case "rewind_sent": {
+					// The command is with pi; the extension will ask for its own confirmation next.
+					this.notice = `sent ${String(payload.command ?? "")} — the checkpoint extension asks for confirmation before it touches anything`;
+					return;
+				}
+				case "pi_restarted": {
+					// A new pi process: the old dialogs are gone, so the client must not keep showing them.
+					this.pendingUi = [];
+					const resumed = (payload.resumed as string | null) ?? null;
+					const requested = (payload.requested as string | null) ?? null;
+					const dropped = Number(payload.pendingApprovals ?? 0);
+					const sameSession = Boolean(resumed) && resumed === requested;
+					this.notice =
+						"pi restarted (config and extensions reloaded) — " +
+						(resumed
+							? sameSession
+								? "the same session was resumed"
+								: `asked to resume ${requested ?? "no session"}, pi resumed ${resumed}`
+							: "no session was active, so this is a fresh one") +
+						(dropped ? `; ${dropped} pending approval(s) were dropped with the old process` : "");
+					this.running = false;
+					this.stderr = [];
+					// Re-read everything that comes from the process.
+					this.send({ type: "get_state" });
+					this.send({ type: "get_messages" });
+					this.send({ type: "get_session_stats" });
+					this.send({ type: "list_sessions" });
+					this.send({ type: "get_commands" });
+					return;
+				}
+				case "writer_state": {
+					this.writer = { holder: (payload.holder as string | null) ?? null, since: (payload.since as string | null) ?? null };
+					return;
+				}
+				case "writer_revoked": {
+					// Another tab took the pen: say so instead of letting the next write fail mysteriously.
+					this.writer = { holder: String(payload.by ?? "another tab"), since: null };
+					this.notice = `tab ${String(payload.by ?? "another tab")} took over this workspace — this tab can still read; write again to take it back`;
 					return;
 				}
 				case "preview": {
@@ -401,7 +475,17 @@ export const useSessionStore = defineStore("session", {
 					if (message?.role === "system") return;
 					const role = message?.role === "user" ? "user" : "assistant";
 					const id = String(message?.id ?? `m-${this.messages.length}-${Date.now()}`);
-					this.messages.push({ id, role, blocks: role === "user" ? [{ kind: "text", text: messageToText(message) }] : [], done: role === "user" });
+					const text = role === "user" ? messageToText(message) : "";
+					this.messages.push({ id, role, blocks: role === "user" ? [{ kind: "text", text }] : [], done: role === "user" });
+					// A queued message appearing as a real message means pi consumed it: stop counting it.
+					if (role === "user") {
+						const index = this.queuedTexts.findIndex((entry) => entry.text === text);
+						if (index >= 0) {
+							const [delivered] = this.queuedTexts.splice(index, 1);
+							if (delivered.kind === "steer") this.queueSteering = Math.max(0, this.queueSteering - 1);
+							else this.queueFollowUp = Math.max(0, this.queueFollowUp - 1);
+						}
+					}
 					return;
 				}
 				case "message_update":
@@ -461,9 +545,16 @@ export const useSessionStore = defineStore("session", {
 					return;
 				}
 				case "queue_update": {
-					// pi reports the complete current queues under `steering` and `followUp`.
-					this.queueSteering = Array.isArray(record.steering) ? (record.steering as unknown[]).length : 0;
-					this.queueFollowUp = Array.isArray(record.followUp) ? (record.followUp as unknown[]).length : 0;
+					// Authoritative when it arrives (pi sends it as the queue drains): it lists what is
+					// still queued, so the derived count is corrected rather than trusted forever.
+					const steering = Array.isArray(record.steering) ? (record.steering as string[]) : [];
+					const followUp = Array.isArray(record.followUp) ? (record.followUp as string[]) : [];
+					this.queueSteering = steering.length;
+					this.queueFollowUp = followUp.length;
+					this.queuedTexts = [
+						...steering.map((text) => ({ kind: "steer" as const, text })),
+						...followUp.map((text) => ({ kind: "followUp" as const, text })),
+					];
 					return;
 				}
 				case "auto_retry_start":
@@ -529,8 +620,19 @@ export const useSessionStore = defineStore("session", {
 				this.setError(`${command} failed: ${JSON.stringify(record.error ?? data).slice(0, 300)}`);
 				return;
 			}
-			switch (command) {
-				case "get_state": {
+				switch (command) {
+					case "prompt": {
+						// pi reports how it took each prompt: `started` (a turn) or `queued` (behind the run).
+						// Responses arrive in send order, so the queue we expected lines up with them.
+						const expected = this.pendingPromptKinds.shift();
+						const disposition = String(data.disposition ?? "");
+						if (!expected || disposition !== "queued") return;
+						this.queuedTexts.push(expected);
+						if (expected.kind === "steer") this.queueSteering++;
+						else this.queueFollowUp++;
+						return;
+					}
+					case "get_state": {
 					this.currentSessionPath = (data.sessionFile as string) ?? this.currentSessionPath;
 					this.sessionName = (data.sessionName as string) ?? null;
 					const model = data.model as { provider?: string; id?: string } | undefined;
@@ -576,6 +678,23 @@ export const useSessionStore = defineStore("session", {
 				case "get_available_thinking_levels": {
 					const levels = (data.levels ?? data.thinkingLevels) as string[] | undefined;
 					this.thinkingLevels = levels ?? [];
+					return;
+				}
+				case "clear_queue": {
+					const steering = (data.steering as string[] | undefined) ?? [];
+					const followUp = (data.followUp as string[] | undefined) ?? [];
+					const recovered = [...steering, ...followUp];
+					this.queueSteering = 0;
+					this.queueFollowUp = 0;
+					this.queuedTexts = [];
+					if (!recovered.length) {
+						this.notice = "clear_queue: nothing was queued";
+						return;
+					}
+					// TUI parity: the queued text goes back into the editor rather than disappearing.
+					const text = recovered.join("\n");
+					this.insertIntoPrompt(this.composerDraft.trim() ? `${text}\n${this.composerDraft}` : text);
+					this.notice = `took back ${recovered.length} queued message${recovered.length === 1 ? "" : "s"} — the text is back in the input`;
 					return;
 				}
 				case "get_session_stats": {
@@ -749,13 +868,42 @@ export const useSessionStore = defineStore("session", {
 		},
 
 		/** Switch a settings view, loading whatever that view needs. */
-		setSettingsTab(tab: "model" | "credentials" | "commands" | "session" | "config"): void {
+		setSettingsTab(tab: "model" | "credentials" | "commands" | "session" | "checkpoints" | "config"): void {
 			this.settingsTab = tab;
 			if (tab === "model" && !this.models.length) this.requestModels();
 			if (tab === "commands" && !this.commands.length) this.requestCommands();
 			if (tab === "credentials") this.loadAuth();
 			if (tab === "session") this.listSessions();
+			if (tab === "checkpoints") this.loadCheckpoints();
 			if (tab === "config" && !this.configFiles.length) this.loadConfigFiles();
+		},
+
+		/** Per-turn code checkpoints (read-only listing; the extension performs the rewind). */
+		loadCheckpoints(): void {
+			void fetch(`/api/checkpoints?ws=${encodeURIComponent(this.cwd)}`)
+				.then((response) => (response.ok ? response.json() : response.text().then((text) => Promise.reject(new Error(text)))))
+				.then((payload: { rows?: CheckpointRow[]; note?: string; repo?: string | null; window?: number }) => {
+					this.checkpoints = payload.rows ?? [];
+					this.checkpointsNote = payload.note ?? "";
+					this.checkpointsRepo = payload.repo ?? null;
+					this.checkpointsWindow = payload.window ?? 15;
+				})
+				.catch((error: unknown) => {
+					this.checkpoints = [];
+					this.checkpointsNote = `could not read the checkpoint index: ${error instanceof Error ? error.message : String(error)}`;
+				});
+		},
+
+		/**
+		 * Ask for a rewind. The extension owns the restore and asks for its own confirmation, which
+		 * arrives as a dialog here — so this sends exactly the command the TUI would receive.
+		 */
+		rewind(index: number, tree = false): void {
+			if (this.running) {
+				this.setError("a run is active: rewind changes the working tree under it — wait for it to finish, then try again");
+				return;
+			}
+			this.send({ type: "rewind", index, tree });
 		},
 
 		/** Switch the git sub-tab and load whatever that view needs (the panels do not self-load). */
@@ -766,6 +914,31 @@ export const useSessionStore = defineStore("session", {
 			if (tab === "branches") this.loadBranches();
 		},
 
+		/** Restart pi in place (`/reload`): config and extensions are re-read, the session is resumed. */
+		reloadPi(confirmed = false): void {
+			this.send({ type: "reload_pi", confirmed });
+		},
+		/**
+		 * `/login` is a TUI command: it does not exist in RPC mode and sending it as a prompt only
+		 * talks to the model (measured — see the README). So the browser hands over a real terminal
+		 * instead of pretending it can drive the flow: open the Shell drawer, start the terminal if
+		 * needed, and type `pi` for the user to confirm. The login then runs in that terminal.
+		 */
+		startLoginTerminal(): void {
+			this.drawer = "shell";
+			this.notice = "in this terminal: press Enter to start pi, then run /login <provider>; the credential is written by pi itself";
+			if (this.ptyRunning) {
+				this.send({ type: "pty_input", data: "pi" });
+				return;
+			}
+			this.pendingLoginText = "pi";
+			// The Shell panel starts the terminal with its real dimensions; the text follows its state.
+		},
+
+		/** Take the pen for this tab (explicit: the server never steals it silently). */
+		claimWriter(force = false): void {
+			this.send({ type: "claim_writer", force });
+		},
 		sendPrompt(text: string): void {
 			if (!text.trim()) return;
 			this.notice = "";
@@ -774,6 +947,7 @@ export const useSessionStore = defineStore("session", {
 			if (this.running) {
 				// pi rejects a plain prompt while streaming; queue it behind the current run and say so.
 				this.notice = "a run is still active — this message was queued as a follow-up";
+				this.pendingPromptKinds.push({ kind: "followUp", text });
 				this.send({ type: "prompt", message: text, streamingBehavior: "followUp" });
 				return;
 			}
@@ -781,6 +955,7 @@ export const useSessionStore = defineStore("session", {
 		},
 		steer(text: string): void {
 			this.clearError();
+			this.pendingPromptKinds.push({ kind: "steer", text });
 			this.send({ type: "steer", message: text });
 		},
 		abort(): void {
@@ -941,20 +1116,71 @@ export const useSessionStore = defineStore("session", {
 		openFileAt(path: string): void {
 			this.fileError = "";
 			this.fileView = null;
+			this.fileEditing = false;
+			this.fileDraft = "";
 			this.pendingFile = path;
 			void fetch(`/api/file?path=${encodeURIComponent(path)}`)
 				.then((response) => response.json())
-				.then((data: { path?: string; text?: string; language?: string | null; bytes?: number; error?: string }) => {
+				.then((data: { path?: string; text?: string; language?: string | null; bytes?: number; mtimeMs?: number; error?: string }) => {
 					if (data.error) {
 						this.fileError = String(data.error);
 						return;
 					}
-					this.fileView = { path: data.path ?? path, text: data.text ?? "", language: data.language ?? null, bytes: data.bytes ?? 0 };
+					this.fileView = {
+						path: data.path ?? path,
+						text: data.text ?? "",
+						language: data.language ?? null,
+						bytes: data.bytes ?? 0,
+						mtimeMs: data.mtimeMs ?? 0,
+					};
 					this.pendingFile = "";
 				})
 				.catch((error: unknown) => {
 					this.fileError = String(error);
 				});
+		},
+
+		/**
+		 * Save the editor. The read's mtime/size go along, so a file that changed on disk is refused
+		 * (409) rather than overwritten — the caller then offers "reload from disk", never a merge.
+		 */
+		saveFile(): void {
+			const view = this.fileView;
+			if (!view || !this.fileEditing) return;
+			this.fileSaving = true;
+			this.fileSaveError = "";
+			void fetch(`/api/file?path=${encodeURIComponent(view.path)}`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ content: this.fileDraft, expectedMtimeMs: view.mtimeMs, expectedSize: view.bytes }),
+			})
+				.then(async (response) => ({ ok: response.ok, body: (await response.json()) as { error?: string; bytes?: number; mtimeMs?: number } }))
+				.then((result) => {
+					this.fileSaving = false;
+					if (!result.ok) {
+						this.fileSaveError = result.body.error ?? "the write was refused";
+						return;
+					}
+					const bytes = result.body.bytes ?? 0;
+					const lines = this.fileDraft.split("\n").length;
+					this.fileView = { ...view, text: this.fileDraft, bytes, mtimeMs: result.body.mtimeMs ?? view.mtimeMs };
+					this.fileEditing = false;
+					this.notice = `wrote ${view.path} — ${bytes} bytes, ${lines} line(s), mtime ${new Date(result.body.mtimeMs ?? Date.now()).toISOString()}`;
+					// The tree and git status may legitimately change after a write.
+					this.refreshGit();
+				})
+				.catch((error: unknown) => {
+					this.fileSaving = false;
+					this.fileSaveError = String(error);
+				});
+		},
+
+		/** Discard the editor and re-read the file (the only offer after a 409 — no merging). */
+		reloadFile(): void {
+			const path = this.fileView?.path;
+			this.fileEditing = false;
+			this.fileSaveError = "";
+			if (path) this.openFileAt(path);
 		},
 
 		// ---- git -------------------------------------------------------------
@@ -1311,6 +1537,10 @@ export const useSessionStore = defineStore("session", {
 			this.send({ type: "get_last_assistant_text" });
 		},
 		/** A discoverable command runs by sending `/name` as a prompt (docs: get_commands). */
+		/** Takes back queued steering/follow-up messages; their text returns to the input. */
+		clearQueue(): void {
+			this.send({ type: "clear_queue" });
+		},
 		insertCommand(name: string): void {
 			this.insertIntoPrompt(`/${name} `);
 			this.showControl = false;

@@ -50,8 +50,10 @@ interface PolicyConfig {
 	rules: Rule[];
 }
 
-const RULES_PATH = join(homedir(), ".pi", "agent", "policy.json");
-const AUDIT_PATH = join(homedir(), ".pi", "agent", "policy-audit.log");
+/** Honours PI_CODING_AGENT_DIR so test instances do not write into the real agent directory. */
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+const RULES_PATH = join(AGENT_DIR, "policy.json");
+const AUDIT_PATH = join(AGENT_DIR, "policy-audit.log");
 
 /** Defaults are written to the config file on first run so they stay editable. */
 const DEFAULT_RULES: Rule[] = [

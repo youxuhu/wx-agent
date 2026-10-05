@@ -76,10 +76,14 @@ function onResizeKey(event: KeyboardEvent): void {
 	event.preventDefault();
 }
 
-/** Service socket + pi child rolled into one line (see web/src/health.ts). */
-const health = computed(() =>
+/** Service socket + pi child rolled into one line (see web/src/health.ts). */const health = computed(() =>
 	healthOf({ conn: store.conn, piState: store.piState, exitInfo: store.exitInfo, reconnectIn: store.reconnectIn }),
 );
+/** The id of the other tab that holds the write pen, or null when this tab is free to write. */
+const otherWriter = computed(() => {
+	const holder = store.writer?.holder ?? null;
+	return holder && holder !== store.clientId ? holder : null;
+});
 
 /** Drawer headings are proper names, not the internal keys. */
 const DRAWER_TITLES: Record<string, string> = {
@@ -106,6 +110,7 @@ const SETTINGS_TABS = [
 	{ key: "credentials", label: "Credentials" },
 	{ key: "commands", label: "Commands" },
 	{ key: "session", label: "Session" },
+	{ key: "checkpoints", label: "Checkpoints" },
 	{ key: "config", label: "Config" },
 ] as const;
 
@@ -158,7 +163,7 @@ function applyDeepLink(): void {
 	const gitTab = params.get("gitTab");
 	if (gitTab === "changes" || gitTab === "history" || gitTab === "branches") store.setGitTab(gitTab);
 	const settingsTab = params.get("settingsTab");
-	if (settingsTab === "model" || settingsTab === "credentials" || settingsTab === "commands" || settingsTab === "session" || settingsTab === "config") {
+	if (settingsTab === "model" || settingsTab === "credentials" || settingsTab === "commands" || settingsTab === "session" || settingsTab === "checkpoints" || settingsTab === "config") {
 		store.setSettingsTab(settingsTab);
 	}
 }
@@ -199,6 +204,14 @@ onMounted(() => {
 			</span>
 			<span v-if="store.running" class="chip chip-warn">working…</span>
 			<span v-if="store.pendingUi.length" class="chip chip-danger">{{ store.pendingUi.length }} approval(s)</span>
+			<!--
+				Writes belong to one tab at a time. When another tab holds the pen, say so and offer the
+				explicit takeover instead of letting the next write fail for no visible reason.
+			-->
+			<span v-if="otherWriter" class="chip chip-warn" :title="`another tab (${otherWriter}) has been writing here since ${store.writer?.since ?? 'unknown'} — reads still work here`">
+				another tab is writing
+				<button class="btn btn-sm" type="button" title="take over from that tab" @click="store.claimWriter(true)">take over</button>
+			</span>
 			<span class="spacer" />
 			<button
 				v-for="tab in TABS"
@@ -287,6 +300,7 @@ onMounted(() => {
 					@prompt="store.sendPrompt($event)"
 					@steer="store.steer($event)"
 					@abort="store.abort()"
+					@clear-queue="store.clearQueue()"
 					@notice="store.notice = $event"
 				/>
 				<div v-if="store.cwd" style="padding: 0 20px 8px">

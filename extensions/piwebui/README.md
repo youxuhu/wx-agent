@@ -125,7 +125,7 @@ cwd 先做 realpath，故 `/tmp` 落到 `--private-tmp--`）。列表包含：�
 | `history` | 提交列表（hash / subject / ref 标签 / 时间），点一条看完整 `git show`（含 `--stat`） | `GET /api/git/log` `GET /api/git/show` |
 | `branches` | 本地/远程分支、当前分支、切换、新建并切换 | `GET /api/git/branches`、`POST /api/git/checkout\|branch` |
 
-**文件面板这轮只读**：没有写文件的代码路径（预览走同一套只读 API）。
+**文件面板可写，但只在一个文件内、且只写内容**：新建/删除/重命名/Move 都不做；预览仍走只读 API。
 
 ### Git 红线（代码强制，做到或明确报不支持）
 
@@ -196,7 +196,15 @@ pi 的**内置 TUI 命令**（`/model` `/settings` `/hotkeys` `/login` `/reload`
 
 ### 与 TUI 的真实差距（不可达的部分）
 
-pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt 发送也不会执行"。因此 `/settings`（交互设置界面）、`/hotkeys`、`/login` `/logout`、`/llama`、`/share`、`/bug`、`/trust`（交互确认）、`/reload` 在 Web UI 里**没有等价物**——除 `/reload` 外都不影响日常使用；改完配置需要在终端敲一次 `/reload`。其余 TUI 能力（模型/思考/压缩/重试/队列模式/会话切换/命名/分叉/克隆/导出/统计/命令/shell）都已在浏览器里可用。
+pi 的**内置 TUI 命令**不在 `get_commands` 里，**实测**经 prompt 发送也不会被执行（会被当普通文本送给模型）。逐个分类：
+
+| TUI 命令 | 浏览器里的情形 |
+| --- | --- |
+| `/login` `/logout` | 没有非交互路径（OAuth 需要真 TTY）。**处理方式**：Settings → Credentials 的 `Open a login terminal` 把 `pi` **打进去但不回车**（Enter 仍属于你），后面你在这个真终端里跑 `/login <provider>`，凭据由 pi 自己写。终端里输入不会被执行这一点有探针守（`login-probe`）。 |
+| `/reload` | **有等价物**：Settings → Config 的 `Restart pi`（两段确认）→ 重启 pi 子进程、重新加载配置与扩展、**恢复同一会话**，终端不受影响；运行中的任务会丢，所以未确认时直接拒绝。事实由服务端回报（实际恢复的是哪个会话、丢了几个未决审批）。 |
+| `/settings` `/hotkeys` `/share` `/bug` `/trust` `/llama` | 仍然没有等价物；不影响日常使用（`/trust` 的语义在我们的审批对话框里由 policy 扩展承担）。 |
+
+其余 TUI 能力（模型/思考/压缩/重试/队列模式与**取回排队**/会话切换与命名与删除/分叉/克隆/导出/统计/命令/shell/**检查点回退**）都已在浏览器里可用。
 
 ### 验收
 
@@ -302,20 +310,46 @@ pi 的**内置 TUI 命令**不在 `get_commands` 里，文档明确"经 prompt �
 - 深链：`?dir=<目录>` 打开工作区、`?file=<路径>` 打开文件、`?drawer=files|git|shell|preview|settings`（可带 `?gitTab=` / `?settingsTab=`）直接打开某个抽屉
 - 右侧抽屉：`Files` · `Git`（内含 `Changes` / `History` / `Branches` 分页）· `Shell`（**真终端**（shell 退出后重开抽屉即得到新 shell）：服务端 node-pty 里的长驻 shell + 前端 xterm.js，`cd`/`export`/颜色/`clear`/全屏程序都原生可用；输出**不进模型上下文**，需要时用 *Insert screen into prompt*）· `Preview` · `Settings`（二级标签 `Model` / `Credentials` / `Commands` / `Session` / `Config`）。会话列表在左侧栏，每条可以删除（两步确认）。
 
+## 检查点与回退（Settings → Checkpoints）
+
+- 列表**只读** `checkpoint` 扩展自己的索引（`<agentDir>/checkpoints.json`），按 workspace 的 **git 顶层目录**过滤，编号与扩展的 `/rewind list` **完全一致**（该仓库最近 15 条，`#1` 最新）。
+- 点 `Rewind files` / `+ conversation` 发送的是扩展本来就接受的命令（`/rewind <n>` / `/rewind <n> --tree`）——**我们不发 ref、不碰 git**；未知编号直接拒绝。
+- 确认由**扩展自己**弹出（会渲染成我们的对话框）；不回答 = 什么都没发生。回退前扩展会先给当前状态打快照（可逆），残留差异它会如实报告。运行中不允许回退。
+
+## 编辑文件（Files → Edit）
+
+写文件的规则写在 `server/fs.ts` 里，不在文档里靠自觉：
+
+| 规则 | 行为 |
+| --- | --- |
+| 位置 | `realpath` 解析后必须仍在 workspace 内；**指向外部的 symlink 一样拒绝**（403） |
+| 内容 | 只写文本（二进制 415）；超过 2MB 拒绝（413）；**不生成 `.bak`**（源码不该被污染，git 是安全网） |
+| 并发 | 保存时必须带上读取时的 `mtimeMs` + `size`；磁盘上变了 → **409 且不写**（绝不盲覆盖，也绝不自动合并） |
+| 缺参数 | 不带 mtime/size 的写请求直接 428 拒绝（避免“反正覆盖”成为选项） |
+| 原子性 | 同目录临时文件 → `rename`，**沿用原文件权限**；失败会清掉临时文件 |
+| 结果 | 保存后如实报告：字节数、行数、新 mtime，并刷新 git 状态；被拒时给“Reload from disk” |
+
+## 对话滚动（对齐 TUI）
+
+- 打开会话直接停在**最新一条**（不是顶部）。
+- 输出过程中视图**跟随最新行**，但只在你本来就位于底部时跟随；一旦向上滚动就停止跟随，不会把你拽回去。
+- 离开底部时右下角出现 **↓ 跳到最新**（键盘 `End` 同效）；回到最新行后按钮自动收起。
+- 判据是纯函数 `web/src/scroll.ts` 的 `isAtBottom()`（`probe/scroll-probe.ts` 覆盖阈值与边界）。
+
 ## 运行状态与错误显示
 
 - 输入框的 `Send` / `Stop` 跟随真实运行状态（`agent_start` 置位、`agent_end` / `agent_settled` 复位，并用 `get_state.isStreaming` 对账）；**运行中发送会自动按 follow-up 排队**并提示，不会因为协议要求 `streamingBehavior` 而被拒。
+- **排队可撤回**：排队计数来自 pi 的确认事实（每个 prompt 的响应带 `disposition: queued/started`），被消费时（该消息作为 user 消息出现）自动减掉，`queue_update` 到达时以它为准纠正。有排队时输入框旁出现 `take back`，点它发 `clear_queue`——**pi 会把排队原文回传，我们把它放回输入框**（TUI 里按 Esc 的语义），不是丢掉。
 - 错误条是**短暂**的：新活动（发消息 / 开始运行 / 成功响应）自动清除，也可以点 `Dismiss`；出错时若仍在运行，条上直接给 **Stop the run**。持续性问题（socket 断开、pi 退出）由顶栏健康指示表达，不混在错误条里。
 
 ## 已知限制
 
-- 代理只转发 HTTP：**dev server 的 WebSocket / HMR 通道没有转发**（页面能用，热更新不生效）；需要热更新请直接用浏览器打开 dev server。
+- **热更新（HMR）可用了**：代理转发 dev server 的 WebSocket 升级（只到已固定的那一个上游，不是开放中继），并向被代理的 HTML 注入一个 shim，把页面自身对**回环地址**的 ws 拨号也改成走代理前缀（非回环目标不动）。开了几个隧道、拒了几个，在 Preview 面板里如实显示。已实测：Vite 类（`vite-hmr` 子协议）与自建 ws upstream；Next/webpack 未实测。
 - 同一时刻只允许一个 dev server（我们只管理自己起的那一个）。
-- 文件面板只读；git 面板不做 push / PR / 交互式 rebase；冲突只展示不解决。
-- 代理只转发 HTTP（无 HMR）；同一时刻只允许一个 dev server。
-- 同一 workspace 的**多标签页**都能发命令（"单写者"目前是 workspace 级，而不是标签页级）。
+- 文件面板可编辑（单文件内容写入，见下文红线）；git 面板不做 push / PR / 交互式 rebase；冲突只展示不解决。
+- 同一 workspace 的**多标签页**由**写租约**管理（标签页级单写者）：先写的标签拿到笔，另一个标签的写命令会被拒绝并**点名持有者**，顶栏给 `take over` 一键接管；被夺方会收到通知；关闭标签自动释放；读永远不受限。
 - 浏览器里的会话与终端 TUI 的会话**相互独立**（pi 没有"同一会话两处驱动"的机制）。
-- 预览面板（P3）与元素拾取尚未实现；审批面板已实现但待端到端验收。
+- `setStatus` 只推不查：页面刷新后扩展状态会空着，直到扩展再次上报（见上文"状态栏"）。
 
 ## 许可与署名
 

@@ -397,10 +397,42 @@ h4 {
 	min-height: 0;
 }
 
+/* Wraps the scroll box so the "jump to latest" control can float over it. */
+.thread-wrap {
+	position: relative;
+	flex: 1;
+	display: flex;
+	min-height: 0;
+}
+
 .thread {
 	flex: 1;
 	overflow: auto;
 	padding: 18px 0;
+}
+
+/* Shown only while the reader has scrolled away from the newest line (the TUI's End key). */
+.jump-latest {
+	position: absolute;
+	right: 18px;
+	bottom: 12px;
+	z-index: 2;
+	width: 30px;
+	height: 30px;
+	border-radius: 15px;
+	border: 1px solid var(--border);
+	background: var(--bg);
+	color: var(--fg-muted);
+	font: inherit;
+	font-size: 14px;
+	line-height: 1;
+	cursor: pointer;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.jump-latest:hover {
+	background: var(--bg-hover);
+	color: var(--fg);
 }
 
 .thread-inner {
@@ -577,6 +609,20 @@ h4 {
 	cursor: default;
 }
 
+/*
+ * Rows that carry several controls (a checkpoint row: number, time, kind, ref, two actions) are
+ * wider than a narrow drawer: let them wrap instead of cutting the last button off, and let the
+ * children shrink so a long ref gives way rather than pushing a button out of view.
+ */
+.list-row-wrap {
+	flex-wrap: wrap;
+	row-gap: 4px;
+}
+
+.list-row-wrap > * {
+	min-width: 0;
+}
+
 .list-row:last-child {
 	border-bottom: none;
 }
@@ -635,6 +681,23 @@ h4 {
 	max-height: 52vh;
 	overflow: auto;
 	background: var(--bg-subtle);
+}
+
+/* The editor: same box as the viewer so switching modes does not jump the layout. */
+.code-edit {
+	width: 100%;
+	max-height: 52vh;
+	min-height: 240px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	padding: 8px;
+	background: var(--bg-subtle);
+	font-family: var(--mono);
+	font-size: var(--fs-xs);
+	line-height: 1.5;
+	white-space: pre;
+	overflow: auto;
+	resize: vertical;
 }
 
 .diff-add {

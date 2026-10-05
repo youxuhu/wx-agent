@@ -25,7 +25,12 @@ interface Checkpoint {
 	kind?: "clean" | "dirty";
 }
 
-const INDEX_PATH = join(homedir(), ".pi", "agent", "checkpoints.json");
+/**
+ * The agent directory honours PI_CODING_AGENT_DIR so a probe or a test instance can point at its
+ * own directory instead of writing into the real one.
+ */
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+const INDEX_PATH = join(AGENT_DIR, "checkpoints.json");
 const MAX_ENTRIES = 50;
 
 function loadIndex(): Checkpoint[] {

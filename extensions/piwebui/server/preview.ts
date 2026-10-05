@@ -12,6 +12,10 @@ import { request as httpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
+import { WebSocket as WsClient, WebSocketServer } from "ws";
+
+/** Completes the browser side of a tunnel; kept separate so tunnels never join the app's client list. */
+const tunnelServer = new WebSocketServer({ noServer: true });
 
 export const PROXY_PREFIX = "/__proxy";
 export const FILE_PREFIX = "/__file";
@@ -186,23 +190,135 @@ export function pickerTag(): string {
 	return `<script data-piwebui-picker="1">${PICKER_SCRIPT}</script>`;
 }
 
+/**
+ * Dev servers push hot updates over their own websocket. Under the proxy the page is served from
+ * our origin, so a client that dials the dev server directly would leave the proxy (and usually
+ * get blocked). The shim routes those dials through the proxy prefix instead.
+ *
+ * Only loopback targets are rewritten: a page that talks to some real external websocket keeps
+ * doing exactly that.
+ */
+export function wsShimTag(): string {
+	const shim = `
+(function () {
+  var PREFIX = ${JSON.stringify(PROXY_PREFIX)};
+  var Native = window.WebSocket;
+  if (!Native) return;
+  var rewrites = 0;
+  function isLoopback(host) { return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' || host === location.hostname; }
+  function rewrite(url) {
+    try {
+      var u = new URL(url, location.href);
+      if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return url;
+      if (u.pathname.indexOf(PREFIX) === 0) return url;
+      if (!isLoopback(u.hostname)) return url;
+      rewrites++;
+      window.__piwebuiWsRewrites = rewrites;
+      return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + PREFIX + u.pathname + u.search;
+    } catch (e) { return url; }
+  }
+  function Patched(url, protocols) {
+    var target = rewrite(String(url));
+    return protocols === undefined ? new Native(target) : new Native(target, protocols);
+  }
+  Patched.prototype = Native.prototype;
+  Object.defineProperty(Patched, 'name', { value: 'WebSocket' });
+  try { Object.setPrototypeOf(Patched, Native); } catch (e) {}
+  Patched.CONNECTING = 0; Patched.OPEN = 1; Patched.CLOSING = 2; Patched.CLOSED = 3;
+  window.WebSocket = Patched;
+})();`;
+	return `<script data-piwebui-ws="1">${shim}</script>`;
+}
+
 /** Root-relative URLs and inline CSS urls must keep pointing at the proxy. */
 export function rewriteHtml(html: string): string {
 	const prefixed = html
 		.replace(/(\b(?:src|href|action|poster|data-src)=)(["'])\/(?!\/)/gi, (_m, attr: string, quote: string) => `${attr}${quote}${PROXY_PREFIX}/`)
 		.replace(/url\(\s*(["']?)\/(?!\/)/gi, (_m, quote: string) => `url(${quote}${PROXY_PREFIX}/`);
 	if (/<html[\s>]/i.test(prefixed) && !/data-piwebui-picker/.test(prefixed)) {
-		return prefixed.replace(/<head[^>]*>/i, (head) => `${head}${pickerTag()}`) === prefixed
-			? `${pickerTag()}${prefixed}`
-			: prefixed.replace(/<head[^>]*>/i, (head) => `${head}${pickerTag()}`);
+		return prefixed.replace(/<head[^>]*>/i, (head) => `${head}${pickerTag()}${wsShimTag()}`) === prefixed
+			? `${pickerTag()}${wsShimTag()}${prefixed}`
+			: prefixed.replace(/<head[^>]*>/i, (head) => `${head}${pickerTag()}${wsShimTag()}`);
 	}
 	return prefixed;
 }
+
 
 export interface ProxyFact {
 	upstream: string;
 	rewritten: boolean;
 	cspRelaxed: boolean;
+}
+
+/** Live websocket tunnels, so the UI can state the fact instead of implying it. */
+let tunnels = 0;
+let tunnelFailures = 0;
+
+export function tunnelFacts(): { open: number; refused: number } {
+	return { open: tunnels, refused: tunnelFailures };
+}
+
+/**
+ * Forward one websocket upgrade to the pinned loopback upstream (dev servers push HMR updates
+ * there). Only the configured upstream is reachable — the proxy never becomes an open relay —
+ * and a refused upgrade is counted so the UI can say so.
+ */
+export function proxyUpgrade(
+	req: import("node:http").IncomingMessage,
+	socket: import("node:stream").Duplex,
+	head: Buffer,
+	options: { upstreamHost: string; upstreamPort: number },
+): void {
+	const raw = req.url ?? "";
+	if (!raw.startsWith(`${PROXY_PREFIX}/`) && raw !== PROXY_PREFIX) {
+		tunnelFailures++;
+		socket.destroy();
+		return;
+	}
+	const upstreamPath = raw.slice(PROXY_PREFIX.length) || "/";
+	const protocols = String(req.headers["sec-websocket-protocol"] ?? "")
+		.split(",")
+		.map((value) => value.trim())
+		.filter(Boolean);
+	const upstream = new WsClient(`ws://${options.upstreamHost}:${options.upstreamPort}${upstreamPath}`, protocols, {
+		headers: { origin: `http://${options.upstreamHost}:${options.upstreamPort}` },
+	});
+	let settled = false;
+
+	upstream.on("open", () => {
+		settled = true;
+		tunnels++;
+		tunnelServer.handleUpgrade(req, socket as never, head, (client: WsClient) => {
+			client.on("message", (data: Buffer, isBinary: boolean) => {
+				if (upstream.readyState === 1) upstream.send(data, { binary: isBinary });
+			});
+			client.on("close", () => upstream.close());
+			client.on("error", () => upstream.close());
+			upstream.on("message", (data: Buffer, isBinary: boolean) => {
+				if (client.readyState === 1) client.send(data, { binary: isBinary });
+			});
+		});
+	});
+
+	const finish = (): void => {
+		if (settled) {
+			settled = false;
+			tunnels = Math.max(0, tunnels - 1);
+		}
+	};
+	upstream.on("close", () => {
+		finish();
+		if (socket.writable) socket.end();
+	});
+	upstream.on("error", () => {
+		if (!settled) {
+			// The upstream is not there: answer like an HTTP proxy would, and say so in a header.
+			tunnelFailures++;
+			socket.write("HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\nx-piwebui-upstream-error: websocket\r\n\r\n");
+		}
+		finish();
+		socket.destroy();
+	});
 }
 
 /**

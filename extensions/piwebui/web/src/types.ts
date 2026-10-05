@@ -136,6 +136,20 @@ export interface PreviewInfo {
 	project: { command: string | null; port: number | null; readyPattern: string | null; configured: boolean };
 	proxyPrefix: string;
 	filePrefix: string;
+	/** Websocket tunnels the proxy is forwarding (hot updates), as observed. */
+	tunnels?: { open: number; refused: number };
+}
+
+/** One per-turn code checkpoint, as listed for the user (see server/checkpoints.ts). */
+export interface CheckpointRow {
+	/** The number the extension's `/rewind` expects — 1 is the newest snapshot. */
+	index: number;
+	at: string;
+	ref: string;
+	shortRef: string;
+	kind: "clean" | "dirty";
+	files: string[];
+	entryId: string | null;
 }
 
 /** What the injected picker reports about the element the user clicked. */

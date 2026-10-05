@@ -19,7 +19,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const AGENT_DIR = join(homedir(), ".pi", "agent");
+/** Honours PI_CODING_AGENT_DIR so test instances do not write into the real agent directory. */
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 const BRANCH = "main";
 const FETCH_TIMEOUT_MS = 8_000;
 const GIT_TIMEOUT_MS = 6_000;

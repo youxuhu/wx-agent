@@ -6,7 +6,7 @@
  * Credentials, Commands, Session, Config) so each view holds one subject. Every button is a real
  * RPC command or HTTP endpoint — nothing here is decorative.
  */
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useSessionStore } from "../stores/session.ts";
 
 const store = useSessionStore();
@@ -16,6 +16,31 @@ const authProvider = ref("");
 const authKey = ref("");
 const defaultProvider = ref("");
 const defaultModel = ref("");
+
+/**
+ * A deep link opens the folder and the drawer at the same time, so this view can ask for its data
+ * before the workspace is known. Reload when the workspace actually changes — otherwise the page
+ * honestly reports "not a git repository" for a folder nobody asked about.
+ */
+watch(
+	() => store.cwd,
+	() => {
+		if (store.settingsTab === "checkpoints") store.loadCheckpoints();
+	},
+);
+
+/**
+ * Restarting pi stops a live run, so the first click only arms the button (two-step, like the
+ * other destructive actions here). The store reports what actually happened afterwards.
+ */
+function restartPi(): void {
+	if (!store.restartPending) {
+		store.restartPending = true;
+		return;
+	}
+	store.restartPending = false;
+	store.reloadPi(true);
+}
 
 const oauthProviders = computed(() => store.authProviders.filter((entry) => entry.kind === "oauth").map((entry) => entry.provider));
 
@@ -153,10 +178,18 @@ onMounted(() => {
 		<h4>Providers &amp; credentials</h4>
 		<p class="fact tiny">
 			Equivalent of the terminal's <code>/login</code> for API keys: set or rotate a key here, or remove one. Values are
-			<strong>never</strong> read back into the browser — only "configured / not configured" is shown. OAuth providers
-			({{ oauthProviders.length ? oauthProviders.join(", ") : "none" }}) still need <code>/login &lt;provider&gt;</code> in the terminal, and
-			environment variables also work as a fallback.
+			<strong>never</strong> read back into the browser — only "configured / not configured" is shown.
 		</p>
+		<p class="fact tiny">
+			<strong>OAuth providers</strong> ({{ oauthProviders.length ? oauthProviders.join(", ") : "none" }}) are different: <code>/login</code> is a TUI
+			command that does not exist in the RPC mode this page drives (sending it as a prompt only talks to the model — measured, see README).
+			So the browser hands you a real terminal instead: it types <code>pi</code> into the Shell drawer, you press Enter and run
+			<code>/login &lt;provider&gt;</code> there. Pi writes the credential itself; nothing here touches tokens.
+		</p>
+		<div class="row">
+			<button class="btn btn-sm" @click="store.startLoginTerminal()">Open a login terminal</button>
+			<span class="tiny faint">types the command, does not run it — you keep the Enter key</span>
+		</div>
 		<div class="row-nowrap">
 			<input v-model="authProvider" class="field" list="known-providers" placeholder="provider id, e.g. deepseek" />
 			<datalist id="known-providers">
@@ -269,11 +302,63 @@ onMounted(() => {
 
 		</template>
 
+		<template v-if="store.settingsTab === 'checkpoints'">
+
+		<!-- checkpoints -->
+		<h4>Checkpoints · {{ store.checkpoints.length }}</h4>
+		<p class="fact tiny">
+			Every turn is snapshotted by the <code>checkpoint</code> extension into its own index; this page only
+			reads it. Rewinding restores <b>tracked files</b> to that snapshot, snapshots the current state first
+			(so the rewind itself is reversible), and the extension asks for its own confirmation — nothing is
+			restored until you answer that dialog.
+		</p>
+		<div class="row">
+			<button class="btn btn-sm" @click="store.loadCheckpoints()">Reload list</button>
+			<span class="tiny faint ellipsis">{{ store.checkpointsRepo ?? "not a git repository" }}</span>
+		</div>
+		<p v-if="store.checkpointsNote" class="fact tiny">{{ store.checkpointsNote }}</p>
+		<div class="list" style="max-height: 34vh">
+			<div v-for="entry in store.checkpoints" :key="entry.index" class="list-row list-row-wrap">
+				<span class="chip">#{{ entry.index }}</span>
+				<span class="tiny">{{ entry.at.slice(11, 19) }}</span>
+				<span class="tiny faint">{{ entry.kind === "clean" ? "clean tree" : `${entry.files.length} file(s)` }}</span>
+				<span class="tiny mono faint" :title="entry.ref">{{ entry.shortRef }}</span>
+				<span class="spacer" />
+				<button
+					class="btn btn-sm"
+					:title="`sends /rewind ${entry.index} — the extension asks before restoring`"
+					@click="store.rewind(entry.index)"
+				>
+					Rewind files
+				</button>
+				<button
+					v-if="entry.entryId"
+					class="btn btn-sm btn-ghost"
+					:title="`sends /rewind ${entry.index} --tree — also navigates the conversation to that turn`"
+					@click="store.rewind(entry.index, true)"
+				>
+					+ conversation
+				</button>
+				<span v-if="entry.files.length" class="tiny faint ellipsis" :title="entry.files.join(', ')">{{ entry.files.slice(0, 2).join(", ") }}</span>
+			</div>
+		</div>
+
+		</template>
+
 		<template v-if="store.settingsTab === 'config'">
 
 		<!-- config -->
 		<h4>Config files</h4>
-		<p class="fact tiny">Only the allowlist is readable and writable; <code>auth.json</code> is never exposed. Saves validate JSON, keep the previous content as <code>.bak</code>, and need <code>/reload</code> (or a restart) to take effect.</p>
+		<p class="fact tiny">Only the allowlist is readable and writable; <code>auth.json</code> is never exposed. Saves validate JSON, keep the previous content as <code>.bak</code>.</p>
+		<h4>Apply changes</h4>
+		<p class="fact tiny">Extensions read their config once when pi starts. Restarting pi re-reads config and extensions and resumes the same session; terminal sessions and the conversation on disk survive, a run in progress does not.</p>
+		<div class="row">
+			<button class="btn btn-sm" :disabled="!store.cwd" @click="restartPi">
+				{{ store.restartPending ? "Confirm: restart pi now" : "Restart pi (reload config & extensions)" }}
+			</button>
+			<button v-if="store.restartPending" class="btn btn-sm btn-ghost" @click="store.restartPending = false">Cancel</button>
+			<span class="tiny faint">Ctrl+R / ⌘R here does not do this (that is the browser's reload)</span>
+		</div>
 		<div class="row">
 			<button
 				v-for="file in store.configFiles"

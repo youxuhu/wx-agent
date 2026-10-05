@@ -17,6 +17,7 @@ const emit = defineEmits<{
 	(event: "prompt", text: string): void;
 	(event: "steer", text: string): void;
 	(event: "abort"): void;
+	(event: "clearQueue"): void;
 	(event: "notice", text: string): void;
 }>();
 
@@ -113,8 +114,17 @@ onBeforeUnmount(() => {
 					<span>steer current run</span>
 				</label>
 				<span v-if="steerMode && !props.running" class="tiny faint">no active run — will be sent as a normal prompt</span>
-				<span v-if="props.queueSteering" class="tiny">queued steering: {{ props.queueSteering }}</span>
-				<span v-if="props.queueFollowUp" class="tiny">queued follow-up: {{ props.queueFollowUp }}</span>
+				<span v-if="props.queueSteering || props.queueFollowUp" class="tiny row">
+					<span>queued: {{ props.queueSteering + props.queueFollowUp }}</span>
+					<button
+						class="btn btn-sm"
+						type="button"
+						title="Take the queued messages back — their text returns to the input (same as Esc in the TUI)"
+						@click="emit('clearQueue')"
+					>
+						take back
+					</button>
+				</span>
 				<span v-if="props.busyHint" class="tiny">{{ props.busyHint }}</span>
 			</div>
 		</div>

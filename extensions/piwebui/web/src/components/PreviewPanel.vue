@@ -12,6 +12,13 @@ const history = ref<string[]>([]);
 const historyIndex = ref(-1);
 
 const status = computed(() => store.previewInfo?.status ?? null);
+/** Hot updates ride a websocket tunnel; report the observed count instead of implying it works. */
+const tunnels = computed(() => store.previewInfo?.tunnels ?? null);
+const tunnelText = computed(() => (tunnels.value ? `${tunnels.value.open} open tunnel(s), ${tunnels.value.refused} refused` : "not reported"));
+const tunnelTitle = computed(
+	() =>
+		"A dev server pushes hot updates over its own websocket. The proxy forwards those upgrades to the pinned dev server only, so a page served from here can still take them.",
+);
 const project = computed(() => store.previewInfo?.project ?? null);
 const width = computed(() => (viewport.value === "full" ? "100%" : `${viewport.value}px`));
 const isFile = computed(() => store.previewUrl.startsWith("/__file/"));
@@ -84,6 +91,8 @@ watch(() => store.pickMode, applyPickMode);
 		<p v-if="store.previewError" class="fact err">{{ store.previewError }}</p>
 		<p v-else-if="status?.error" class="fact err">{{ status.error }}</p>
 		<p v-else-if="status?.readyVia" class="fact tiny">ready via {{ status.readyVia }}</p>
+		<!-- Facts, not a promise: the tunnel counter says whether hot updates can actually reach the page. -->
+		<p class="fact tiny" :title="tunnelTitle">websocket: {{ tunnelText }}</p>
 
 		<div class="frame-wrap">
 			<iframe :key="store.previewFrameKey" ref="frame" :src="store.previewUrl || 'about:blank'" :style="{ width }" @load="applyPickMode" />

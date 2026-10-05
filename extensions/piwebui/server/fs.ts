@@ -6,9 +6,9 @@
  * and binaries are refused with a fact instead of being streamed.
  */
 import { execFile } from "node:child_process";
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { chmod, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 export interface DirEntry {
 	name: string;
@@ -129,6 +129,8 @@ async function ignoredSet(dir: string, names: string[]): Promise<Set<string>> {
 export interface FileRead {
 	path: string;
 	bytes: number;
+	/** Sent back on save, so a file changed on disk is refused instead of overwritten. */
+	mtimeMs: number;
 	text: string;
 	language: string | null;
 	binary: boolean;
@@ -149,7 +151,78 @@ export async function readText(root: string, requested: string): Promise<FileRea
 	const buffer = await readFile(targetReal);
 	const binary = buffer.includes(0);
 	if (binary) return `refused: ${targetReal} looks binary (${info.size} bytes) — no binary preview`;
-	return { path: targetReal, bytes: info.size, text: buffer.toString("utf8"), language: languageOf(targetReal), binary: false, truncated: false };
+	return { path: targetReal, bytes: info.size, mtimeMs: info.mtimeMs, text: buffer.toString("utf8"), language: languageOf(targetReal), binary: false, truncated: false };
+}
+
+export interface WriteAttempt {
+	/** The text the editor holds. */
+	content: string;
+	/** What the client read before editing: a mismatch means someone else changed the file. */
+	expectedMtimeMs?: number;
+	expectedSize?: number;
+}
+
+export interface WriteSuccess {
+	path: string;
+	bytes: number;
+	mtimeMs: number;
+	mode: string;
+}
+
+export interface WriteRefusal {
+	status: number;
+	error: string;
+}
+
+/**
+ * Write one workspace file, with the containment and concurrency rules written into the code:
+ *
+ *  - the target is resolved with realpath and must stay inside the workspace (a symlink pointing
+ *    outside is refused, exactly like reading);
+ *  - only regular text files are written (no binaries, no files above the read limit);
+ *  - the client must send the mtime/size it read, so a file changed on disk is *refused* rather
+ *    than silently overwritten (no merge, no guessing — the user decides);
+ *  - the write is atomic (same directory, temp file, rename) and keeps the file's mode.
+ */
+export async function writeFileSafe(root: string, requested: string, attempt: WriteAttempt): Promise<WriteSuccess | WriteRefusal> {
+	const rootReal = await realpathOrNull(root);
+	if (!rootReal) return { status: 409, error: `refused: workspace ${root} does not exist` };
+	const target = isAbsolute(requested) ? requested : join(rootReal, requested);
+	const targetReal = await realpathOrNull(target);
+	if (!targetReal) return { status: 404, error: `refused: ${requested} does not exist (this editor updates existing files)` };
+	if (!inside(rootReal, targetReal)) return { status: 403, error: `refused: ${targetReal} is outside the workspace ${rootReal}` };
+
+	const info = await stat(targetReal);
+	if (!info.isFile()) return { status: 403, error: `refused: ${targetReal} is not a regular file` };
+	if (info.size > MAX_TEXT_BYTES) return { status: 413, error: `refused: ${targetReal} is ${info.size} bytes (limit ${MAX_TEXT_BYTES})` };
+	const existing = await readFile(targetReal);
+	if (existing.includes(0)) return { status: 415, error: `refused: ${targetReal} looks binary — this editor writes text only` };
+
+	const bytes = Buffer.byteLength(attempt.content, "utf8");
+	if (bytes > MAX_TEXT_BYTES) return { status: 413, error: `refused: ${bytes} bytes is above the ${MAX_TEXT_BYTES} byte limit` };
+
+	// Optimistic concurrency: both values are required, because a missing one would mean "overwrite".
+	if (attempt.expectedMtimeMs === undefined || attempt.expectedSize === undefined) {
+		return { status: 428, error: "refused: send expectedMtimeMs and expectedSize (read the file first, then edit it)" };
+	}
+	if (Math.round(info.mtimeMs) !== Math.round(attempt.expectedMtimeMs) || info.size !== attempt.expectedSize) {
+		return {
+			status: 409,
+			error: `refused: ${targetReal} changed on disk (size ${attempt.expectedSize} → ${info.size}, mtime ${new Date(attempt.expectedMtimeMs).toISOString()} → ${new Date(info.mtimeMs).toISOString()}) — reload it and redo the edit`,
+		};
+	}
+
+	const temporary = join(dirname(targetReal), `.piwebui-write-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
+	try {
+		await writeFile(temporary, attempt.content, { encoding: "utf8", mode: info.mode });
+		await chmod(temporary, info.mode);
+		await rename(temporary, targetReal);
+	} catch (error) {
+		await rm(temporary, { force: true }).catch(() => undefined);
+		return { status: 500, error: `write failed: ${error instanceof Error ? error.message : String(error)}` };
+	}
+	const after = await stat(targetReal);
+	return { path: targetReal, bytes, mtimeMs: after.mtimeMs, mode: (info.mode & 0o777).toString(8).padStart(3, "0") };
 }
 
 export function languageOf(path: string): string | null {

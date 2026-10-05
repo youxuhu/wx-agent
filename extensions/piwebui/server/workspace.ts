@@ -43,10 +43,15 @@ export class Workspace {
 	readonly cwd: string;
 	/** A real terminal for this workspace (see server/pty.ts). Owned here so it survives UIs. */
 	readonly pty: PtySession;
-	readonly child: PiRpcChild;
+	/** The pi process. Mutable because `/reload` restarts it in place (same cwd, same session). */
+	child: PiRpcChild;
+	private readonly childOptions: { cwd: string; piBin: string; piNode?: string; piScript?: string; piArgs: string[] };
+	private readonly hooks: WorkspaceHooks;
 	readonly devServer: DevServer;
 	readonly pendingUi = new Map<string, UiRequest>();
 	currentSessionPath: string | null = null;
+	/** True between agent_start and agent_settled, so a restart can warn about stopping a live run. */
+	agentRunning = false;
 	lastStderr = "";
 	preview: PreviewProject = {};
 	previewRoot: string;
@@ -57,7 +62,9 @@ export class Workspace {
 	constructor(cwd: string, options: { piBin: string; piNode?: string; piScript?: string; piArgs: string[]; agentDir: string; hooks: WorkspaceHooks }) {
 		this.cwd = cwd;
 		this.previewRoot = cwd;
-		this.child = new PiRpcChild({ cwd, piBin: options.piBin, piNode: options.piNode, piScript: options.piScript, args: options.piArgs });
+		this.childOptions = { cwd, piBin: options.piBin, piNode: options.piNode, piScript: options.piScript, piArgs: options.piArgs };
+		this.hooks = options.hooks;
+		this.child = this.spawnChild();
 		this.pty = new PtySession(cwd, {
 			data: (data) => options.hooks.ptyData(data),
 			exit: (exitCode, signal) => options.hooks.ptyExit(exitCode, signal),
@@ -66,16 +73,56 @@ export class Workspace {
 			onStatus: () => options.hooks.preview(),
 			onLog: () => undefined,
 		});
-		this.child.on("record", (record: RpcRecord) => this.handleRecord(record, options.hooks));
-		this.child.on("state", (info: unknown) => options.hooks.state(info));
-		this.child.on("stderr", (chunk: string) => {
-			this.lastStderr = `${this.lastStderr}${chunk}`.slice(-4000);
-			options.hooks.stderr(chunk);
-		});
-		this.child.on("malformed", (line: string) => options.hooks.malformed(line));
-		this.child.start();
 		this.loadPreviewConfig(options.agentDir);
 		void this.detectRepo();
+	}
+
+	/**
+	 * Create and wire one pi process.
+	 *
+	 * Every handler checks that the process is still *this* workspace's process: a replaced child
+	 * keeps emitting while it dies, and a late event from it must never be applied to the new one
+	 * (same trap as the terminal's callbacks).
+	 */
+	private spawnChild(): PiRpcChild {
+		const hooks = this.hooks;
+		const child = new PiRpcChild(this.childOptions);
+		child.on("record", (record: RpcRecord) => {
+			if (this.child !== child) return;
+			this.handleRecord(record, hooks);
+		});
+		child.on("state", (info: unknown) => {
+			if (this.child !== child) return;
+			hooks.state(info);
+		});
+		child.on("stderr", (chunk: string) => {
+			if (this.child !== child) return;
+			this.lastStderr = `${this.lastStderr}${chunk}`.slice(-4000);
+			hooks.stderr(chunk);
+		});
+		child.on("malformed", (line: string) => {
+			if (this.child !== child) return;
+			hooks.malformed(line);
+		});
+		child.start();
+		return child;
+	}
+
+	/**
+	 * Restart pi in place (`/reload`): a new process, same working directory, the same session file
+	 * resumed, terminal untouched. Returns the session it asked to resume so the caller can report it.
+	 */
+	restartChild(): { resumed: string | null; pendingApprovals: number } {
+		const resumed = this.currentSessionPath;
+		const pendingApprovals = this.pendingUi.size;
+		// Requests that were waiting belonged to the process that is going away.
+		this.pendingUi.clear();
+		const previous = this.child;
+		this.child = this.spawnChild();
+		previous.stop();
+		this.currentSessionPath = resumed;
+		if (resumed) this.child.command("switch_session", { sessionPath: resumed });
+		return { resumed, pendingApprovals };
 	}
 
 	private async detectRepo(): Promise<void> {
@@ -115,6 +162,8 @@ export class Workspace {
 	}
 
 	private handleRecord(record: RpcRecord, hooks: WorkspaceHooks): void {
+		if (record.type === "agent_start") this.agentRunning = true;
+		if (record.type === "agent_end" || record.type === "agent_settled") this.agentRunning = false;
 		if (record.type === "response") {
 			if (record.command === "get_state") {
 				const data = record.data as { sessionFile?: string } | undefined;

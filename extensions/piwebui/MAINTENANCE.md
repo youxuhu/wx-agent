@@ -45,7 +45,7 @@ server/main.ts ── 只绑 127.0.0.1 ──┬── Workspace 注册表（一
 | `web/src/components/*.vue` | 壳（App）、对话流、工具卡、审批、状态栏、左侧栏、右侧抽屉各面板 |
 | `web/src/markdown.ts` | 自研 markdown 渲染（先整段转义，只输出自己的标签） |
 | `web/src/health.ts` | 顶栏健康指示（socket + pi 子进程合成一句） |
-| `probe/*.ts` | 8 个可执行验收探针（见 §5），**改完必须跑** |
+| `probe/*.ts` | 26 个可执行验收探针（见 §5），**改完必须跑** |
 | `desktop/` | Tauri 壳（Rust）+ 打包资源（不进 git） |
 | `scripts/desktop-prepare.mjs` | 组装桌面资源：打包 server → 复制 web → 裁剪 pi 运行时 → 下载 Node |
 | `scripts/desktop-verify.mjs` | 打包前验证：用裁剪运行时起 pi 并确认**扩展能加载** |
@@ -105,9 +105,20 @@ npm run desktop:build    # 出 .app + .dmg
 | `probe/message-probe.ts` | 无（离线，含真实 `get_messages` 抓包） | 消息块解析：判别字段是 **`kind`**（不是 `type`）、thinking 独立块、toolCall→toolCallId、字符串 content、空 content 不造假块、未知块类型被丢弃、`messageToText` 只取 text | 10/10 |
 | `probe/run-lifecycle-probe.ts` | :7799 | 运行生命周期：运行中 plain prompt 会被 pi 拒绝（所以我们必须带 `streamingBehavior`）、`followUp` 被接受（`disposition: queued`）、settle 后 plain prompt 又能用、`get_state.isStreaming` 是布尔 | 6/6 |
 | `probe/auth-probe.ts` | :7802 + 一次性 agentDir | provider 列表、**响应里不出现任何密钥值**（与真实 auth.json 比对）、OAuth 不可被 api key 覆盖、坏 provider/空 key 拒绝、写入合并、删除需确认、文件权限 600 | 11/11 |
+| `probe/scroll-probe.ts` | 无（离线） | 对话滚动：底部跟随、trackpad 余量、上滚不跟随、内容短于视口即视为到底、坏测量不抛 | 9/9 |
+| `probe/clear-queue-probe.ts` | :7796（`--live` 需模型） | 排队取回：命令可达、返回两队列、空队列不报错、外部 workspace 被拒、`--live` 下两个 prompt 得到 `disposition: queued`、**原文回传**、`queue_update` 随后纠正为空 | 12/12（live） |
+| `probe/tab-writer-probe.ts` | :7796 | 标签页写租约：首写自动获得、第二个标签被拒且**点名持有者**、`not-writer` 可机读、未 force 不夺取、force 夺取并通知被夺方、被夺方再写被拒、关闭释放、读不受限 | 15/15 |
+| `probe/preview-ws-probe.ts` | :7796 + 带 ws 的 upstream（preview.json） | HMR 隧道：经 `/__proxy/` 升级 101、子协议透传、双向数据、隧道计数与释放、前缀外升级被拒、HTML 带 ws shim、shim 改写回环拨号/放行非回环/不重复改写 | 15/15 |
+| `probe/reload-probe.ts` | :7796 | 重启 pi：报告 resumed/requested、同一会话文件恢复、未确认时被拒（`needs-confirmation`）、重启后 state/messages/commands 可读、**终端不受影响**、外部 workspace 不可重启 | 14/14 |
+| `probe/rewind-probe.ts` | :7796 + `/tmp/cplab` + 带扩展的测试 agentDir | 检查点：按 git 顶层与 realpath 过滤他仓库快照、窗口与编号和扩展一致（15/#1 最新）、越界索引被拒、发送的是扩展自己的命令、**扩展的确认对话框到达客户端**、取消后工作树未变 | 15/15 |
+| `probe/login-probe.ts` | :7796 | `/login`：`get_commands` 里没有 login/logout（实测）、只打字不执行（`$((6*7))` 不出结果）、回车后才执行、客户端只打 `pi` 从不为用户打 `/login`、页面与 README 如实写明限制 | 12/12 |
+| `probe/file-write-probe.ts` | :7796 + `/tmp/cplab` | 写文件：200 并报告字节、模式保持、无 `.bak`、无临时残留、**磁盘变化 409 且文件不动**、无 mtime/size 428、外部路径/symlink 403、二进制 415、超大 413、原子（临时文件+rename，失败清理） | 23/23 |
 
-跑法：`node probe/<name>-probe.ts`（部分支持 `BASE=` / `WS_A=` / `REPO=` 环境变量覆盖）。
-**注意**：`workspace-probe` 假设服务是刚起的（注册表里只有一个 workspace）；重跑前请重启服务。
+跑法（推荐）：`npm run probe:all` —— `scripts/probe-all.mjs` 会**自动搭好所有环境**：测试 agent 目录（软链真实 `extensions/`、拷 `auth.json`/`models.json`/`settings.json`）、preview / websocket 两个 fixture 上游（`probe/fixtures/`）、一次性 auth 副本、一个临时 git 仓库，然后按**正确顺序**起 :7801 / :7802 / :7799 / :7796 并依次跑全部探针，最后打印汇总表并以非零码退出（可 `--only=pty,scroll`、`--keep`）。
+
+单跑一个：`node probe/<name>-probe.ts [port]`（部分支持 `BASE=` / `WS_A=` / `REPO=` 环境变量覆盖）。
+**注意**：`workspace-probe` 断言"注册表里只有一个 workspace"，所以它在脚本里**单独且最先**跑；手工重跑前必须重启 :7799。
+**`probe/approval-probe.ts` 是手工驱动脚本**（需要模型 + policy ask 规则），不参与汇总；审批的自动验收是 `disconnect-probe`。
 
 ---
 
@@ -156,6 +167,24 @@ npm run desktop:build    # 出 .app + .dmg
 - 实时路径同理：`tool_execution_update.partialResult` 是流式片段，`tool_execution_end.result.content` 是最终结果；`content` 为空时要退回 `structuredContent`（有些工具只给结构化数据）。
 - 状态语义：`done` / `error` 来自真实结果；**没有结果的调用（中断、页面刷新前发生）必须显示 `unknown`**，不能假装还在跑。
 - 长输入/输出：保留尾部 20000 字符并**明确写出丢了多少**（不静默截断）。
+
+## 6.13 写操作的三道闸门（登记与租约）
+
+- **工作目录级**：只有 `active` workspace 接受写命令（非 active 一律拒绝并报出 active 是谁）。
+- **标签页级**：每个连接有 `clientId`，**谁先写谁拿到笔**（`writers` 表）；别的标签再写会被拒绝并点名持有者（`code: "not-writer"`），顶栏给 `take over`；`claim_writer {force:true}` 会**通知被夺方**（`writer_revoked`）；连接关闭自动释放；**读永远不受限**。
+- **运行级**：会话替换类操作（`reload_pi`）在 `agentRunning` 时默认拒绝（要 `confirmed:true`）；`rewind` 运行中直接拒绝（改工作树）。
+- 教训：`resolve(message, socket, write)` 是唯一的闸门，**新加的写命令必须走它**，否则就绕过了三条规则。
+
+## 6.14 排队消息的计数只能来自事实
+
+- pi **不会**实时推送队列内容：`queue_update` 只在回合结束后到达，且只含**剩余**项。
+- 能观测到的事实：每个 `prompt` 的响应带 `disposition`（`queued` / `started`），排队消息被消费时会**作为 user 消息出现**。
+- 所以计数 = 确认入队 +1、出现在消息里 -1，`queue_update` 到达时**以它为准纠正**。不要"乐观"计数，也不要指望 `queue_update` 及时。
+
+## 6.15 会话替换的后续操作要用新 ctx / 新进程
+
+- pi 会在 `newSession` / `fork` / `switchSession` / `reload` 之后让**旧的 extension ctx 失效**（实测会收到 `This extension ctx is stale after session replacement or reload`）。
+- 我们的对应红线：重启/替换 pi 子进程时，回调必须**校验身份**（`this.child !== child` 就丢弃），否则被替换进程的迟到事件会污染新进程的状态（终端那次的同一个坑）。
 
 ## 6.12 布局不变量（窗口变窄时必须仍然成立）
 
