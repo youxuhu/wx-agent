@@ -25,3 +25,8 @@ extensions/*/node_modules/
 extensions/piwebui/desktop/resources/
 extensions/piwebui/desktop/src-tauri/target/
 extensions/piwebui/desktop/src-tauri/gen/
+# secrets / machine-local state discovered after this file was written
+web-search.json
+checkpoints.json
+policy-audit.log
+pi-web-access/

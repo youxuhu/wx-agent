@@ -1,0 +1,65 @@
+{
+  "mode": "normal",
+  "rules": [
+    {
+      "tool": "bash",
+      "match": "/(^|[;&|]\\s*)rm\\s+-[a-zA-Z]*[rf]/i",
+      "action": "deny",
+      "reason": "recursive/forced delete"
+    },
+    {
+      "tool": "bash",
+      "match": "/(^|[;&|]\\s*)sudo\\b/i",
+      "action": "deny",
+      "reason": "privilege escalation"
+    },
+    {
+      "tool": "bash",
+      "match": "/(^|[;&|]\\s*)curl\\b[^|]*\\|\\s*(ba)?sh/i",
+      "action": "deny",
+      "reason": "piping a download into a shell"
+    },
+    {
+      "tool": "bash",
+      "match": "/^\\s*git\\s+push\\b/i",
+      "action": "ask",
+      "reason": "publishes commits to a remote"
+    },
+    {
+      "tool": "bash",
+      "match": "/^\\s*npm\\s+publish\\b/i",
+      "action": "ask",
+      "reason": "publishes a package"
+    },
+    {
+      "tool": "bash",
+      "match": "/(^|[;&|]\\s*)chmod\\b.*777/i",
+      "action": "ask",
+      "reason": "world-writable permissions"
+    },
+    {
+      "tool": "write",
+      "match": "outside-cwd",
+      "action": "ask",
+      "reason": "writes outside the session root"
+    },
+    {
+      "tool": "edit",
+      "match": "outside-cwd",
+      "action": "ask",
+      "reason": "writes outside the session root"
+    },
+    {
+      "tool": "edit",
+      "match": "/mnt/c/Users/revy/.codex/config.toml",
+      "action": "allow",
+      "reason": "always-allow from prompt"
+    },
+    {
+      "tool": "write",
+      "match": "/home/revy/.codex/config.toml",
+      "action": "allow",
+      "reason": "always-allow from prompt"
+    }
+  ]
+}
