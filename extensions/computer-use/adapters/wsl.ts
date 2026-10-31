@@ -1,13 +1,6 @@
-/**
- * adapters/wsl.ts — Phase 3 stub (PLAN §5.4: powershell.exe interop, CopyFromScreen + SendInput).
- * Returns an unsupported adapter.
- */
-import { unsupportedAdapter } from "../platform";
+/** WSL adapter using the Windows desktop via powershell.exe interop. */
+import { createWindowsAdapter } from "./windows";
 
 export function createAdapter() {
-	return unsupportedAdapter(
-		"wsl",
-		"WSL interop (powershell.exe CopyFromScreen/SendInput) arrives in Phase 3.",
-		"Phase 3",
-	);
+	return createWindowsAdapter("wsl");
 }

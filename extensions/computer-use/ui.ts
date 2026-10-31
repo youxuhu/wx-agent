@@ -14,6 +14,8 @@ const MAX_TREE_NODES = 400;
 export const BRIEFING = `── computer 操作手册（首次调用附赠，此后不再重复）──
 观察分级: tree(默认,纯文本控件树,0图像成本) | full(截图+树,关键节点自动触发) | minimal
 截图时机: 任务开始/焦点切换/页面跳转/blocked/每10动作心跳；其余时刻用控件树定位
+多步任务: 先用 todo 建立结果态意图；动作后 fresh 观察并核验成功条件，再更新对应 todo；ok/hash 变化不等于完成
+minimal/stale 观察不能判定结果，必要时显式 screenshot
 坐标: element index 优先；pixel 仅兜底，须落在最近截图 raster 内
 聚焦: action:"activate" + app 打开/置顶目标 App 一步到位（未运行自动启动；防遮挡/防输入错窗）
 停止: 连续3次无变化或 blocked 时必须换路径或向用户汇报，勿重复同一动作
@@ -66,6 +68,12 @@ widget index 为深度优先 1-based；tree 上限 400 节点 / 200 行。
 == 窗口与焦点 ==
 焦点判定以前台应用 pid 为准（frontmostApplication 交叉核验）。
 被遮挡时先 activate 目标 App 再点击，避免动作进错窗口。
+
+== Intent 与轨迹记忆（多步任务） ==
+用现有 todo 工具记录状态型子目标，不建第二套任务库；仅更新 metadata.kind="computer-intent" 的本轮条目。
+动作回执 ok / 页面变化 / 模型 goal_completed 都不是完成证据。动作后先核对新观察与 todo success criterion：satisfied+证据才 completed；progress 留 in_progress；neutral 记录失败边并换路；blocked/uncertain 记原因或补观察。
+todo metadata 只存短 evidence/verdict 与有界的状态→动作→状态边；只有有证据的 progress/satisfied 才算正向经验；同状态不重试 neutral/regression 边。不存截图、密码或完整敏感输入。原始目标和约束不可被自动重写；只调整未完成路线。发送/删除/付款/提交等最终副作用先向用户确认。
+无障碍树不可用或 observation 为 minimal 时，动作后显式 screenshot 获取新证据再判定。详细模板由 computer-use Skill 按需提供。
 
 == 阻塞与停止 ==
 结果尾行 blocked: popup|focus-change|no-progress 给出事实性观察描述（含可观测信号）。

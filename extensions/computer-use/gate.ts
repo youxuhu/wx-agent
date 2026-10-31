@@ -7,7 +7,7 @@
  *   - widgetTree merge (§5.4) is a TODO stub — lands with the a11y backends in Phase 2.
  */
 
-import type { BlockInfo, WindowInfo } from "./platform";
+import type { WindowInfo } from "./platform";
 
 export type ObservationLevel = "full" | "tree" | "minimal"; // PLAN §1.1
 
