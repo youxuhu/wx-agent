@@ -168,6 +168,12 @@ npm run desktop:build    # 出 .app + .dmg
 - 状态语义：`done` / `error` 来自真实结果；**没有结果的调用（中断、页面刷新前发生）必须显示 `unknown`**，不能假装还在跑。
 - 长输入/输出：保留尾部 20000 字符并**明确写出丢了多少**（不静默截断）。
 
+## 6.12b 桌面端只在被要求时打包
+
+`desktop:prepare` / `desktop:build` / 覆盖安装都会**关掉正在运行的 app**，并且耗时、产物 188M。
+所以默认不打包：改完代码只需 `npm run typecheck` + `npm run probe:all`；只有用户明确说"打包/重装桌面版"时才执行，
+步骤见 README 的"重新安装"（先 `osascript -e 'quit app "pi agent"'` 并确认进程为 0）。
+
 ## 6.13 写操作的三道闸门（登记与租约）
 
 - **工作目录级**：只有 `active` workspace 接受写命令（非 active 一律拒绝并报出 active 是谁）。
