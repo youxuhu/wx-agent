@@ -1,16 +1,16 @@
 {
   "lastChangelogVersion": "1.4.0",
   "theme": "dark",
-  "defaultProvider": "zai-api",
-  "defaultModel": "glm-5.3",
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-flash",
   "tuiMode": "fullscreen",
   "packages": [
-    "npm:pi-web-access",
-    "npm:@juicesharp/rpiv-todo",
-    "npm:pi-subagents",
-    "npm:@juicesharp/rpiv-ask-user-question",
-    "npm:@narumitw/pi-btw",
-    "npm:pi-lens"
+    "npm:pi-web-access@0.46.0",
+    "npm:@juicesharp/rpiv-todo@2.15.0",
+    "npm:pi-subagents@0.84.0",
+    "npm:@juicesharp/rpiv-ask-user-question@2.15.0",
+    "npm:@narumitw/pi-btw@0.63.3",
+    "npm:@narumitw/pi-lsp@0.49.11"
   ],
   "terminal": {
     "showTerminalProgress": true
@@ -36,10 +36,61 @@
       "cursor-agent-writer": {
         "disabled": true
       }
+    },
+    "watchdog": {
+      "enabled": true,
+      "main": {
+        "thinking": "low"
+      },
+      "scope": {
+        "enabled": true
+      },
+      "cadence": {
+        "everyNTools": 10
+      },
+      "clarification": false,
+      "stalemateRepeats": 3,
+      "children": {
+        "enabled": false
+      },
+      "lsp": {
+        "enabled": false
+      }
     }
   },
   "defaultTools": [
-    "+codemode"
+    "+codemode",
+    "+tool_search"
   ],
-  "deviceId": "eaa700ba-83f1-4d40-a033-463eaa275fb0"
+  "deviceId": "eaa700ba-83f1-4d40-a033-463eaa275fb0",
+  "compaction": {
+    "enabled": true,
+    "modelOverrides": {
+      "deepseek/deepseek-flash": {
+        "reserveTokens": 500000
+      },
+      "deepseek/deepseek-v4-pro": {
+        "reserveTokens": 500000
+      },
+      "zai-coding-cn/glm-5.3": {
+        "reserveTokens": 500000
+      },
+      "zai-coding-cn/glm-5.3-flash": {
+        "reserveTokens": 500000
+      },
+      "zai-coding-cn/glm-5.3-highspeed": {
+        "reserveTokens": 500000
+      },
+      "zai-api/glm-5.3": {
+        "reserveTokens": 500000
+      },
+      "zai-api/glm-5.3-flash": {
+        "reserveTokens": 500000
+      }
+    }
+  },
+  "codemode": {
+    "mode": "on",
+    "inlineBudget": 1000
+  }
 }

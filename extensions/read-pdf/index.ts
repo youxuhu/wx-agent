@@ -14,14 +14,26 @@
  * Params: path (required), firstPage (1-based, default 1), maxPages (default 8, cap 20).
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext, ImageContent, TextContent } from "@earendil-works/pi-coding-agent";
 
+async function runProcess(cmd: string, args: string[], opts: { input?: string; encoding?: string; timeout?: number; signal?: AbortSignal } = {}) {
+  return await new Promise<{status:number|null;stdout:string;stderr:string;error?:Error}>((resolve,reject)=>{
+    if(opts.signal?.aborted){reject(new Error("PDF reading cancelled"));return}
+    const child=spawn(cmd,args,{stdio:["pipe","pipe","pipe"]});let stdout="",stderr="",failure:Error|undefined;
+    const stop=()=>{failure=new Error("PDF reading cancelled");child.kill("SIGTERM")};
+    const timer=setTimeout(()=>{failure=new Error("PDF rendering timed out");child.kill("SIGTERM")},opts.timeout??120000);
+    opts.signal?.addEventListener("abort",stop,{once:true});
+    child.stdout.on("data",b=>{stdout+=b});child.stderr.on("data",b=>{stderr=(stderr+b).slice(-4000)});
+    child.on("error",e=>{failure=e});child.on("close",status=>{clearTimeout(timer);opts.signal?.removeEventListener("abort",stop);resolve({status,stdout,stderr,error:failure})});
+    child.stdin.on("error",()=>{});child.stdin.end(opts.input??"");
+  });
+}
 const DEFAULT_MAX_PAGES = 8;
 const HARD_MAX_PAGES = 20;
 const SCALE = 2.0; // 2x page rect ≈ 144 dpi, readable and token-reasonable
@@ -68,9 +80,9 @@ interface RenderResult {
 }
 
 /** macOS: render via embedded Swift + PDFKit. */
-function renderWithSwift(pdfPath: string, outDir: string, firstPage: number, maxPages: number): RenderResult {
-	const r = spawnSync("swift", ["-", pdfPath, outDir, `${SCALE}`, `${maxPages}`, `${firstPage}`], {
-		input: SWIFT_SOURCE,
+async function renderWithSwift(pdfPath: string, outDir: string, firstPage: number, maxPages: number, signal?: AbortSignal): Promise<RenderResult> {
+	const r = await runProcess("swift", ["-", pdfPath, outDir, `${SCALE}`, `${maxPages}`, `${firstPage}`], {
+		signal, input: SWIFT_SOURCE,
 		encoding: "utf8",
 		timeout: 120_000,
 	});
@@ -90,12 +102,12 @@ function renderWithSwift(pdfPath: string, outDir: string, firstPage: number, max
 }
 
 /** Linux/Windows: render via poppler's pdftoppm; total pages via pdfinfo. */
-function renderWithPdftoppm(pdfPath: string, outDir: string, firstPage: number, maxPages: number): RenderResult {
+async function renderWithPdftoppm(pdfPath: string, outDir: string, firstPage: number, maxPages: number, signal?: AbortSignal): Promise<RenderResult> {
 	const last = firstPage + maxPages - 1;
-	const r = spawnSync(
+	const r = await runProcess(
 		"pdftoppm",
 		["-png", "-r", "144", "-f", String(firstPage), "-l", String(last), pdfPath, join(outDir, "page")],
-		{ encoding: "utf8", timeout: 120_000 },
+		{ encoding: "utf8", timeout: 120_000, signal },
 	);
 	if (r.error && (r.error as { code?: string }).code === "ENOENT") {
 		throw new Error("pdftoppm not found. Install poppler (Debian/WSL: sudo apt install poppler-utils; Arch: sudo pacman -S poppler).");
@@ -113,21 +125,22 @@ function renderWithPdftoppm(pdfPath: string, outDir: string, firstPage: number, 
 			files.push(target);
 			continue;
 		}
-		const raw = join(outDir, `page-${String(i)}.png`);
+		const found = readdirSync(outDir).find(name => /^page-\d+\.png$/.test(name) && Number(name.slice(5,-4)) === i);
+		const raw = join(outDir, found ?? `page-${String(i)}.png`);
 		if (existsSync(raw)) {
 			renameSync(raw, target);
 			files.push(target);
 		}
 	}
 	if (files.length === 0) throw new Error("pdftoppm produced no pages (range beyond document?)");
-	const info = spawnSync("pdfinfo", [pdfPath], { encoding: "utf8", timeout: 30_000 });
+	const info = await runProcess("pdfinfo", [pdfPath], { encoding: "utf8", timeout: 30_000, signal });
 	const pm = /Pages:\s+(\d+)/.exec(info.stdout ?? "");
 	return { pages: pm ? Number(pm[1]) : files.length, files };
 }
 
-function renderPages(pdfPath: string, outDir: string, firstPage: number, maxPages: number): RenderResult {
-	if (process.platform === "darwin") return renderWithSwift(pdfPath, outDir, firstPage, maxPages);
-	return renderWithPdftoppm(pdfPath, outDir, firstPage, maxPages);
+async function renderPages(pdfPath: string, outDir: string, firstPage: number, maxPages: number, signal?: AbortSignal): Promise<RenderResult> {
+	if (process.platform === "darwin") return renderWithSwift(pdfPath, outDir, firstPage, maxPages, signal);
+	return renderWithPdftoppm(pdfPath, outDir, firstPage, maxPages, signal);
 }
 
 export default function readPdf(pi: ExtensionAPI) {
@@ -181,16 +194,16 @@ export default function readPdf(pi: ExtensionAPI) {
 				process.env.TMPDIR || "/tmp",
 				`pi-read-pdf-${createHash("sha1").update(key).digest("hex").slice(0, 12)}`,
 			);
-			const reuse =
-				existsSync(outDir) && existsSync(join(outDir, `page-${String(firstPage).padStart(3, "0")}.png`));
-			if (!reuse) {
-				rmSync(outDir, { recursive: true, force: true });
-				mkdirSync(outDir, { recursive: true });
-			}
+      mkdirSync(outDir, {recursive:true});
 
 			let result: RenderResult;
 			try {
-				result = renderPages(target, outDir, firstPage, maxPages);
+				const metaPath = join(outDir,"meta.json");
+        let total:number|undefined;
+        try{total=JSON.parse(readFileSync(metaPath,"utf8")).pages}catch{}
+        const cached = total ? Array.from({length:Math.max(0,Math.min(maxPages,total-firstPage+1))},(_,i)=>join(outDir,`page-${String(firstPage+i).padStart(3,"0")}.png`)) : [];
+        if(cached.length && cached.every(existsSync)) result={pages:total!,files:cached};
+        else { result = await renderPages(target, outDir, firstPage, maxPages, _signal); writeFileSync(metaPath,JSON.stringify({pages:result.pages})); }
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],

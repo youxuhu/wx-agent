@@ -60,6 +60,18 @@ export default function llmSpeed(pi: ExtensionAPI) {
 	let latestSpeed: number | undefined;
 	let requestRender: (() => void) | undefined;
 	let enabled = true;
+  let firstChunk = false;
+  let watch = "?";
+  let watchSequence = -1;
+  let sessionId: string | undefined;
+  let cachedStats: {input:number;output:number;cacheRead:number;cacheWrite:number;cost:number;hit?:number} | undefined;
+  const invalidateStats = () => { cachedStats = undefined; requestRender?.(); };
+  pi.events.on("pi-subagents:watchdog-state:v1", (event: any) => {
+    if(event?.version !== 1 || event.sessionId !== sessionId || event.sequence <= watchSequence) return;
+    watchSequence = event.sequence; watch = event.phase; requestRender?.();
+  });
+  for(const event of ["session_compact", "session_tree", "agent_settled"] as const) pi.on(event, invalidateStats);
+
 
 	const computeSpeed = (ctx: ExtensionContext, usage: UsageLike): void => {
 		if (ctx.mode !== "tui") return;
@@ -79,7 +91,7 @@ export default function llmSpeed(pi: ExtensionAPI) {
 		let cacheWrite = 0;
 		let cost = 0;
 		let latestCacheHitRate: number | undefined;
-		for (const entry of ctx.sessionManager.getEntries() as Array<Record<string, any>>) {
+		if (!cachedStats) for (const entry of ctx.sessionManager.getEntries() as Array<Record<string, any>>) {
 			if (entry.type === "message" && entry.message?.role === "assistant") {
 				const u = entry.message.usage as UsageLike | undefined;
 				if (!u) continue;
@@ -107,6 +119,9 @@ export default function llmSpeed(pi: ExtensionAPI) {
 			}
 		}
 
+    if(cachedStats) ({input,output,cacheRead,cacheWrite,cost,hit:latestCacheHitRate}=cachedStats);
+    else cachedStats={input,output,cacheRead,cacheWrite,cost,hit:latestCacheHitRate};
+
 		// Context usage (compaction-aware).
 		const contextUsage = ctx.getContextUsage() as { percent: number | null; contextWindow?: number } | undefined;
 		const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
@@ -114,30 +129,15 @@ export default function llmSpeed(pi: ExtensionAPI) {
 		const contextPercent = contextUsage?.percent !== null && contextUsage?.percent !== undefined ? contextPercentValue.toFixed(1) : "?";
 
 		const parts: string[] = [];
-		if (input) parts.push(`↑${fmtTokens(input)}`);
-		if (output) parts.push(`↓${fmtTokens(output)}`);
-		if (cacheRead) parts.push(`R${fmtTokens(cacheRead)}`);
-		if (cacheWrite) parts.push(`W${fmtTokens(cacheWrite)}`);
-		if ((cacheRead > 0 || cacheWrite > 0) && latestCacheHitRate !== undefined) {
-			parts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
-		}
-		const usingSubscription = ctx.model?.provider === "kimi-coding"; // approximation, see header
-		if (cost || usingSubscription) parts.push(`$${cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
-		// The speed segment — the reason this footer exists.
-		if (latestSpeed !== undefined) parts.push(speedColor(latestSpeed, theme));
-		// "(auto)" marker: built-in shows it only when auto-compact is enabled;
-		// that flag is not accessible, and auto-compact is on by default.
-		const contextDisplay = `${contextPercent}%/${fmtTokens(contextWindow)} (auto)`;
-		if (contextPercentValue > 90) parts.push(theme.fg("error", contextDisplay));
-		else if (contextPercentValue > 70) parts.push(theme.fg("warning", contextDisplay));
-		else parts.push(contextDisplay);
-
-		let statsLeft = parts.join(" ");
-		let statsLeftWidth = visibleWidth(statsLeft);
-		if (statsLeftWidth > width) {
-			statsLeft = truncateToWidth(statsLeft, width, "...");
-			statsLeftWidth = visibleWidth(statsLeft);
-		}
+    const cfg = pi.getSettings().compaction;
+    const key = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
+    const reserve = cfg?.modelOverrides?.[key]?.reserveTokens ?? cfg?.reserveTokens ?? 16384;
+    const threshold = contextWindow ? `${((contextWindow-reserve)/contextWindow*100).toFixed(0)}%` : "?";
+    parts.push(`ctx ${contextPercent}%`, `watch ${watch}`, `compact ${cfg?.enabled===false?"off":threshold}`);
+    parts.push(`cache ${latestCacheHitRate===undefined?"?":latestCacheHitRate.toFixed(0)+"%"}`);
+    while(parts.length>2 && visibleWidth(parts.join("  ·  "))>width) parts.pop();
+    let statsLeft = truncateToWidth(parts.join("  ·  "),width,"…");
+    let statsLeftWidth = visibleWidth(statsLeft);
 
 		// Right side: model id + thinking level + provider prefix (if room).
 		const modelName = ctx.model?.id || "no-model";
@@ -157,7 +157,7 @@ export default function llmSpeed(pi: ExtensionAPI) {
 			statsLeft = statsLeft + padding + rightSide;
 		} else {
 			const availableForRight = width - statsLeftWidth - 2;
-			if (availableForRight > 0) {
+			if (availableForRight >= rightSideWidth) {
 				const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
 				const padding = " ".repeat(Math.max(0, width - statsLeftWidth - visibleWidth(truncatedRight)));
 				statsLeft = statsLeft + padding + truncatedRight;
@@ -181,7 +181,7 @@ export default function llmSpeed(pi: ExtensionAPI) {
 						// Line 1: pwd (branch) • session name
 						let pwd = fmtCwd(ctx.sessionManager.getCwd());
 						const branch = footerData.getGitBranch();
-						if (branch) pwd = `${pwd} (${branch})`;
+						// Git branch and dirty counts remain together in the extension status row.
 						const sessionName = ctx.sessionManager.getSessionName();
 						if (sessionName) pwd = `${pwd} • ${sessionName}`;
 						const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
@@ -190,12 +190,11 @@ export default function llmSpeed(pi: ExtensionAPI) {
 						// built-in: dim left part and remainder separately (inner ANSI resets).
 						const statsLine = buildStatsLine(ctx, theme, footerData, width);
 						const statsLeftWidth = Math.min(visibleWidth(statsLine), width);
-						const dimmedStats = theme.fg("dim", statsLine.slice(0, statsLeftWidth));
-						const remainder = statsLine.slice(statsLeftWidth);
-						const line2 = dimmedStats + theme.fg("dim", remainder);
+						const line2 = theme.fg("dim", statsLine);
 
 						// Line 3: extension statuses (plan / sandbox / git …), alphabetical.
 						const lines = [pwdLine, line2];
+            const telemetry = [latestSpeed===undefined?"":speedColor(latestSpeed,theme), cachedStats?.cost ? `$${cachedStats.cost.toFixed(3)}` : ""].filter(Boolean).join("  ·  ");
 						const statuses = footerData.getExtensionStatuses();
 						if (statuses.size > 0) {
 							const statusLine = Array.from(statuses.entries())
@@ -204,8 +203,9 @@ export default function llmSpeed(pi: ExtensionAPI) {
 						// (e.g. \x1b) would shred ANSI escapes into literal “[38;2…m” text.
 						.map(([, text]) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
 								.join(" ");
-							lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+							lines.push(truncateToWidth([telemetry,statusLine].filter(Boolean).join("  ·  "), width, theme.fg("dim", "…")));
 						}
+            if(statuses.size===0 && telemetry) lines.push(truncateToWidth(telemetry,width,"…"));
 						return lines;
 					} catch {
 						return [theme.fg("dim", "footer error (llm-speed)")];
@@ -216,22 +216,25 @@ export default function llmSpeed(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		if (ctx.mode === "tui" && enabled) mountFooter(ctx);
+		sessionId = ctx.sessionManager.getSessionId(); watch="?"; watchSequence=-1; cachedStats=undefined;
+    pi.events.emit("pi-subagents:watchdog-query:v1",{});
+    if (ctx.mode === "tui" && enabled) mountFooter(ctx);
 	});
 
 	pi.on("message_start", async (event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		if (event.message.role === "assistant") t0 = performance.now();
+		if (event.message.role === "assistant") { t0 = performance.now(); firstChunk = false; }
 	});
 
 	pi.on("message_update", async (event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		// First streamed chunk: restart the clock to exclude time-to-first-token.
-		if (event.message.role === "assistant" && t0 === undefined) t0 = performance.now();
+		if (event.message.role === "assistant" && !firstChunk) { t0 = performance.now(); firstChunk = true; }
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		if (event.message.role !== "assistant") return;
+		invalidateStats();
+    if (event.message.role !== "assistant") return;
 		const usage = (event.message as { usage?: UsageLike }).usage;
 		if (!usage) return;
 		computeSpeed(ctx, usage);
@@ -258,8 +261,8 @@ export default function llmSpeed(pi: ExtensionAPI) {
 				return;
 			}
 			const lines = [
-				`最近输出速度：${Math.round(latestSpeed)} tok/s`,
-				`档位：<100 红 · 100-200 灰 · 200-300 蓝 · ≥300 绿`,
+				`Latest output speed: ${Math.round(latestSpeed)} tok/s`,
+				`Bands: <100 red · 100-200 gray · 200-300 blue · ≥300 green`,
 			];
 			ctx.ui.notify(lines.slice(0, NOTIFY_MAX_LINES).join("\n"), "info");
 		},

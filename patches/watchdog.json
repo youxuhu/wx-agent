@@ -1,0 +1,8 @@
+{
+  "package": "pi-subagents",
+  "version": "0.84.0",
+  "file": "bundle/chunk-235AWJUQ.js",
+  "pristineSha256": "8ca9682c197438c39908d555236f99af71ccb3e8cb46a7c841a533be4a843aa2",
+  "interface": "pi-subagents:watchdog-state:v1",
+  "retireWhen": "Upstream exports supported lifecycle events and snapshot queries"
+}

@@ -1,0 +1,8 @@
+{
+  "guidance": {
+    "promptSnippet": "Track requested or complex multi-step work",
+    "promptGuidelines": [
+      "Use todo for complex work or requested checklists; keep only one current task list. Update status from evidence, preserve unfinished requirements, and report blockers without marking them done."
+    ]
+  }
+}

@@ -41,7 +41,7 @@ scan_added_lines() {
     for pattern in "${SECRET_PATTERNS[@]}"; do
       if printf '%s\n' "$line" | grep -Eq -- "$pattern"; then
         echo "auto-push: possible secret in an added line (pattern: $pattern)"
-        echo "           ${line:0:160}"
+        echo "           (content redacted)"
         hits=$((hits + 1))
         break
       fi

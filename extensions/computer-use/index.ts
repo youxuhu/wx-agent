@@ -140,17 +140,9 @@ export default function computerUse(pi: ExtensionAPI): void {
 		// v3.1 §4.2 L0 (verbatim): identity + when-to-use + the single iron rule, ≤120 tokens.
 		promptSnippet:
 			"computer — see/control the desktop GUI. Widget-tree observations; screenshots on demand.",
-		promptGuidelines: [
-			"Use `computer` ONLY for desktop GUI automation the user asks for. Target elements by index " +
-			"from the widget tree; call action:\"screenshot\" when you need to see pixels.",
-			"For multi-step GUI work, create outcome-based todos before the first mutation using the existing `todo` tool. " +
-			"After each mutation, inspect a fresh observation and separately verify it against the active todo's success criterion; " +
-			"tool `ok`, a changed hash, or the action model's completion claim is not proof. If the result is `minimal` or stale, take a screenshot.",
-			"Update only todos tagged `metadata.kind=computer-intent`; preserve the user's goal/constraints and replan only unfinished steps. " +
-			"Keep short evidence/verdict and bounded semantic state→action→state edges in todo metadata; only evidence-backed progress/satisfied edges count as positive, " +
-			"and do not repeat neutral/regression edges from the same state. Never store credentials/screenshots. Ask before consequential actions or scope changes; " +
-			"todo tracking does not bypass /cua permission checks.",
-		],
+        promptGuidelines: [
+          'Use computer only for requested GUI work. For multi-step actions load the computer-use skill first. Act on fresh observations and verify outcomes before marking progress; /cua permissions still apply.',
+        ],
 		description:
 			"Desktop GUI automation. Observations default to a compact widget tree (no image cost); " +
 			"screenshots are taken automatically at key moments or on demand. First call includes a " +

@@ -1,0 +1,13 @@
+{
+  "name": "minepi-runtime",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Managed local Pi extensions, tests and versioned compatibility patches",
+  "scripts": {
+    "test": "python3 scripts/test.py",
+    "verify": "python3 scripts/maintain.py verify",
+    "install:runtime": "python3 scripts/maintain.py install",
+    "updates": "python3 scripts/maintain.py update-check"
+  }
+}

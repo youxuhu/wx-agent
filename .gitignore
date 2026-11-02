@@ -30,3 +30,15 @@ web-search.json
 checkpoints.json
 policy-audit.log
 pi-web-access/
+
+# private undo state and validation evidence
+checkpoint-v2/
+verification/
+
+outputs/
+
+handoffs/
+
+maintenance-candidates.json
+
+maintenance-lock.json

@@ -30,40 +30,13 @@ import { spawnSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /** Tools removed from the active set while in the plan role. */
-const DISABLED_TOOLS = new Set(["edit", "update_plan", "ast_grep_replace"]);
+const DISABLED_TOOLS = new Set(["edit", "update_plan", "ast_grep_replace", "lsp_fix"]);
 /** Tool name for writing the plan. */
 const PLAN_FILE = "PLAN.md";
 
-const PLAN_INSTRUCTIONS = `You are in the PLAN role (read-only). This section OVERRIDES any other instruction about making changes. Your job: research, then write the plan to PLAN.md — you do NOT implement anything.
+const PLAN_INSTRUCTIONS = `PLAN role: research with read-only tools. Do not implement or change state. The only allowed write is a complete PLAN.md at the project root. Clarify material ambiguity, then write the plan, stop, and reply with a short link. Do not create todos unless requested. A blocked call is not permission to retry another mutation path.`;
 
-WHAT YOU MUST DO (in order):
-1. RESEARCH — use read-only tools only: read, grep/find, ls, read-only bash (cat/grep/ls/find/wc…), and web tools (web_search, source_check, fetch_content). You may run read-only verification commands ONLY if they write no files and change no project state.
-2. CLARIFY — ask_user_question whenever requirements are ambiguous or a tradeoff matters.
-3. WRITE THE PLAN — when research is done, write the complete, decision-complete plan to PLAN.md at the project root with the write tool (the ONLY file you may create or modify, and only AFTER the plan is complete).
-4. STOP — after PLAN.md is written, end your turn; your chat reply is ONLY a 2-3 line summary pointing to PLAN.md. Never paste the whole plan into chat.
-
-WHAT YOU MUST NOT DO:
-- Do NOT create, edit, delete, or rename ANY file except PLAN.md (enforced; violations are blocked).
-- Do NOT run bash that writes anything: no > or >> redirects, no tee, no heredoc-to-file, no rm/mv/cp/mkdir/touch/patch, no git add/commit/push, no npm/pip/cargo install or build, no make. Read-only shell only.
-- Do NOT use edit or ast_grep_replace — they are removed/blocked in this role.
-- Do NOT retry a blocked tool call. If blocked, you are in PLAN role — go back to research or write PLAN.md.
-- Do NOT reply with the plan text in chat and skip writing PLAN.md. The plan MUST exist as a file.
-- Do NOT create todo items unless the user explicitly asks (only allowed after the plan is accepted, in build role).`;
-
-const BUILD_INSTRUCTIONS = `You are in the BUILD role (normal development). If PLAN.md exists at the project root, implement it step by step. If the user asked for todos, keep them updated as you work.
-
-CHANGE-MEMORY ROUTINE (project AGENTS.md): Before you start implementing anything, open the project's AGENTS.md (read file at the cwd root; it is auto-loaded at pi startup but re-read it now if it exists). You must:
-  1. Fetch the plan: read PLAN.md if present, otherwise take the user's request as the change to make.
-  2. CHECK FIRST: if AGENTS.md contains a memory section ("## 变更记忆 / Change Log", see recipe below) of past changes and issues for THIS project, read it BEFORE coding. If the current task matches a previously-recorded pitfall, follow that note and do not repeat the recorded mistake. This is what keeps cost low and avoids re-trying dead ends.
-  3. IMPLEMENT: do the work normally (full tools, edits, bash). If you run into a genuine blocker / error / dead-end and then find the way around it, record ONE short bullet about it right away into the active memory (see recipe). Keep every record to a few words / one line: no code dumps, no stack traces, no long detail.
-  4. WHEN THIS BUILD FINISHES your planned change (verified working), update AGENTS.md:
-     - Under "## 已完成/已完成变更 or Change Log", append ONE line each: the purpose of the change and the simple approach/idea you used (no detail), marking which PLAN.md (title) or request it satisfied. This marks the previous plan as addressed;
-     - open a fresh empty "active" slot (or leave the log ready) for the NEXT build to write into;
-     - if you finished a full cycle end-to-end (plan was implemented and verified), you may rename PLAN.md to PLAN.md.done (best-effort) so the next build does not re-read an already-implemented plan.
-  5. Keep AGENTS.md records minimal: one line per change purpose, one line per approach, one short bullet per encountered issue/exception. Trade being concise for completeness.
-
-Recommended AGENTS.md memory shape the agent maintains (append to the project AGENTS.md only if it doesn't exist, WITHOUT clobbering any real guidance the repo already has in its file):
-\n---\n## Change Log (变更记忆)\nLatest on top. One-liners only + minimal issue notes per entry.\n- [purpose+who/what] method: one-line approach\n  - issue: one short line on any blocker got past\n`;
+const BUILD_INSTRUCTIONS = `BUILD role: implement the user's current request and any applicable accepted plan. Check existing project instructions and change memory before editing. Verify relevant behavior. At completion record only a brief change/issue note in AGENTS.md; keep history concise. Use todos when helpful or requested; do not repeat completed work.`;
 
 type Role = "build" | "plan";
 let role: Role = "build";
@@ -305,7 +278,7 @@ export default function planSwitch(pi: ExtensionAPI) {
 		if (role !== "plan") return;
 		const name: string = (event as { toolName: string }).toolName;
 
-		if (name === "edit" || name === "update_plan" || name === "ast_grep_replace") {
+		if (name === "edit" || name === "update_plan" || name === "ast_grep_replace" || name === "lsp_fix") {
 			return {
 				block: true,
 				reason:

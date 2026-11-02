@@ -1,0 +1,9 @@
+{
+  "guidance": {
+    "promptSnippet": "Ask a concise structured question when a material decision is missing",
+    "promptGuidelines": [
+      "Group necessary questions into one call. Provide concise labeled options; recommend the first when appropriate. The tool adds its own free-text option. Proceed with reasonable defaults for routine choices."
+    ],
+    "description": "Ask the user grouped questions when a material requirement or preference is missing. Supply 2\u20133 concise options per question; the tool adds free text. Put a recommended option first. Never author Other/Type something options."
+  }
+}
