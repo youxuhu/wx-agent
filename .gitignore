@@ -48,3 +48,8 @@ backups/
 __pycache__/
 
 /pi-lsp.json
+
+# 语言服务的版本 pin 必须入库（其它位置的 package*.json 仍是运行产物）
+!lsp/package.json
+!lsp/package-lock.json
+logs/

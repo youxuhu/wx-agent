@@ -45,6 +45,29 @@ python3 scripts/maintain.py verify --root "$HOME/.pi/agent"
 
 安装输出回滚 manifest 的位置必须保存；备份存在源码目录 backups/，不要提交。新机器安装后生成本机 maintenance-lock.json，不复制旧机器的文件 hash 清单。进入 Pi 执行 `/reload`、`/health`、`/effective-config`，确认当前模型/上下文窗口符合配置，再测试一个临时 Git 项目的 undo/redo。
 
+### 3.1 语言服务（lsp/）与 SDK 解析
+
+`pi-lsp` 需要的 `typescript-language-server` / `pyright-langserver` **不依赖 PATH**：版本 pin 在仓库的
+`lsp/package.json`（伴随 `lsp/package-lock.json`），装到 `lsp/node_modules`（不入库，沿用 `node_modules/` 规则）。
+
+- **自动安装**：`extensions/lsp-bootstrap` 在会话启动后后台核对 pin 与实际版本；缺失或漂移才执行
+  `npm ci --legacy-peer-deps`，失败只报一次并给出日志（`logs/lsp-bootstrap.log`）。启动不等待 npm。
+  `PI_LSP_AUTOINSTALL=off` 可跳过（离线/CI）；同一时刻只有一个进程在装（`lsp/.bootstrap.lock`）。
+- **机器本地配置**：`pi-lsp.json` 只在该文件缺失时由引导逻辑生成，内容是指向 `lsp/node_modules/.bin/*`
+  的绝对路径（因此不随 PATH 变化）。它已被 gitignore，**不要**把逐机路径写进公共模板。
+- **手动兜底**（引导失败时）：`cd "$HOME/.pi/agent/lsp" && npm ci --legacy-peer-deps`，随后 `/reload`。
+- **SDK 解析**：扩展与 `scripts/test.py` 需要能解析 `@earendil-works/{pi-tui,pi-ai,pi-agent-core}`、`typebox`、
+  `jiti`。它们随 Pi 核心安装，软链到运行目录即可（版本必须与核心一致，本机为 1.4.0）：
+
+```sh
+CORE="$(npm root -g)/@earendil-works/pi-coding-agent/node_modules"
+mkdir -p "$HOME/.pi/agent/node_modules/@earendil-works"
+for p in pi-tui pi-ai pi-agent-core; do ln -sfn "$CORE/@earendil-works/$p" "$HOME/.pi/agent/node_modules/@earendil-works/$p"; done
+for m in typebox jiti; do ln -sfn "$CORE/$m" "$HOME/.pi/agent/node_modules/$m"; done
+```
+
+没有这些软链时：Pi 本身仍能加载扩展（jiti 走核心路径），但 `tests/*.mjs` 直连扩展文件会报 `Cannot find module`。
+
 ## 4. 同步策略和边界
 
 推荐独立源码 clone；git-sync 扩展只管理运行目录自身的 Git 仓库，不会自动同步外部源码。更新源码后先验证再部署。运行目录若也是 clone，不要同时维护两份分叉源码；明确以哪个 clone 为准。
