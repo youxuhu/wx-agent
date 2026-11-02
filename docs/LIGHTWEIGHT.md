@@ -45,7 +45,7 @@ python3 scripts/maintain.py verify
 python3 scripts/maintain.py install
 python3 scripts/maintain.py update-check
 python3 scripts/maintain.py rollback --backup /absolute/path/to/rollback.json
-npm test
+python3 scripts/test.py
 ```
 
 Install is idempotent and transactional, preserves unrelated settings, preflights the hash-guarded patch, and keeps exact rollback copies. Rollback refuses to overwrite later edits. Changing package/core/peer versions or modifying the watchdog chunk requires a fresh compatibility check. Unknown patch contents fail before runtime mutation. No automatic update daemon was added.
@@ -61,3 +61,5 @@ Passed: existing undo/redo/native Pi SessionManager, footer widths/caching, watc
 Full SDK lifecycle load after replacement: no loader/lifecycle errors; no lens tools or Skills. LSP integration required local process IPC beyond the sandbox and was tested only in a temporary project. It made no model requests and changed no user project.
 
 Run `/reload` in Pi, then `/health`. Existing in-flight runs retain their loaded code until reload. If a project explicitly loads pi-lens through its own configuration, remove that override separately; global settings do not silently override an explicit project package.
+
+For cross-machine setup and known absolute-path limitations, see [MULTI-MACHINE.md](MULTI-MACHINE.md) and [MAINTENANCE.md](MAINTENANCE.md). Historical backup paths in this report apply only to the original machine.
