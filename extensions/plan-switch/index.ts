@@ -268,7 +268,11 @@ export default function planSwitch(pi: ExtensionAPI) {
 	// Inject role instructions before each agent run. They are PREPENDED so the
 	// role is the first thing the model reads — appending them to the end let
 	// weaker models miss the plan-role constraints entirely.
-	pi.on("before_agent_start", (event) => {
+	pi.on("before_agent_start", (event, ctx) => {
+		// Re-assert the footer status every turn: pi clears ALL extension statuses
+		// on /reload and session invalidation (resetExtensionUI), and session_start
+		// alone does not reliably re-fire after those. Idempotent, zero cost.
+		updateStatus(ctx);
 		const instructions = role === "plan" ? PLAN_INSTRUCTIONS : BUILD_INSTRUCTIONS;
 		return { systemPrompt: `${instructions}\n\n${event.systemPrompt}` };
 	});

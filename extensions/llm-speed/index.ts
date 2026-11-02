@@ -10,6 +10,9 @@
  * Speed: output tokens / generation time. message_start records t0; the FIRST
  * message_update re-records t0 (excluding time-to-first-token); message_end
  * computes usage.output / elapsed. One value per LLM response, latest wins.
+ * Sanity guard: burst-delivered streams (proxy/gateway buffering) collapse the
+ * wall clock, so a response is only trusted with >=3 streamed chunks and >=0.5s
+ * elapsed; otherwise the footer shows "t/s ?" instead of a garbage number.
  *
  * Bands: <100 error(红) · 100–200 dim(灰) · 200–300 accent(蓝) · ≥300 success(绿).
  *
@@ -58,27 +61,38 @@ function speedColor(speed: number, theme: Theme): string {
 export default function llmSpeed(pi: ExtensionAPI) {
 	let t0: number | undefined;
 	let latestSpeed: number | undefined;
+	let speedUnknown = false;
+	let chunkCount = 0;
 	let requestRender: (() => void) | undefined;
 	let enabled = true;
   let firstChunk = false;
   let watch = "?";
   let watchSequence = -1;
   let sessionId: string | undefined;
-  let cachedStats: {input:number;output:number;cacheRead:number;cacheWrite:number;cost:number;hit?:number} | undefined;
+  let cachedStats: {input:number;output:number;cacheRead:number;cacheWrite:number;cost:number} | undefined;
   const invalidateStats = () => { cachedStats = undefined; requestRender?.(); };
+  const resetStream = () => { t0 = undefined; firstChunk = false; chunkCount = 0; speedUnknown = false; };
   pi.events.on("pi-subagents:watchdog-state:v1", (event: any) => {
     if(event?.version !== 1 || event.sessionId !== sessionId || event.sequence <= watchSequence) return;
     watchSequence = event.sequence; watch = event.phase; requestRender?.();
   });
-  for(const event of ["session_compact", "session_tree", "agent_settled"] as const) pi.on(event, invalidateStats);
+  for(const event of ["session_compact", "agent_settled"] as const) pi.on(event, invalidateStats);
+  // Branch/session switch: stream state belongs to the old branch — reset it too.
+  pi.on("session_tree", () => { resetStream(); invalidateStats(); });
 
 
 	const computeSpeed = (ctx: ExtensionContext, usage: UsageLike): void => {
 		if (ctx.mode !== "tui") return;
 		if (t0 === undefined || usage.output <= 0) return;
 		const elapsedSec = (performance.now() - t0) / 1000;
+		const chunks = chunkCount;
 		t0 = undefined;
+		chunkCount = 0;
 		if (elapsedSec <= 0) return;
+		// Unreliable measurement (burst delivery, single-shot response): show "?"
+		// instead of an absurd number, and never fake it with the previous value.
+		if (chunks < 3 || elapsedSec < 0.5) { latestSpeed = undefined; speedUnknown = true; requestRender?.(); return; }
+		speedUnknown = false;
 		latestSpeed = usage.output / elapsedSec;
 		requestRender?.();
 	};
@@ -90,7 +104,6 @@ export default function llmSpeed(pi: ExtensionAPI) {
 		let cacheRead = 0;
 		let cacheWrite = 0;
 		let cost = 0;
-		let latestCacheHitRate: number | undefined;
 		if (!cachedStats) for (const entry of ctx.sessionManager.getEntries() as Array<Record<string, any>>) {
 			if (entry.type === "message" && entry.message?.role === "assistant") {
 				const u = entry.message.usage as UsageLike | undefined;
@@ -100,8 +113,6 @@ export default function llmSpeed(pi: ExtensionAPI) {
 				cacheRead += u.cacheRead;
 				cacheWrite += u.cacheWrite;
 				cost += u.cost.total;
-				const promptTokens = u.input + u.cacheRead + u.cacheWrite;
-				latestCacheHitRate = promptTokens > 0 ? (u.cacheRead / promptTokens) * 100 : undefined;
 			} else if (entry.type === "message" && entry.message?.role === "toolResult" && entry.message.usage) {
 				const u = entry.message.usage as UsageLike;
 				input += u.input;
@@ -119,8 +130,8 @@ export default function llmSpeed(pi: ExtensionAPI) {
 			}
 		}
 
-    if(cachedStats) ({input,output,cacheRead,cacheWrite,cost,hit:latestCacheHitRate}=cachedStats);
-    else cachedStats={input,output,cacheRead,cacheWrite,cost,hit:latestCacheHitRate};
+    if(cachedStats) ({input,output,cacheRead,cacheWrite,cost}=cachedStats);
+    else cachedStats={input,output,cacheRead,cacheWrite,cost};
 
 		// Context usage (compaction-aware).
 		const contextUsage = ctx.getContextUsage() as { percent: number | null; contextWindow?: number } | undefined;
@@ -134,7 +145,12 @@ export default function llmSpeed(pi: ExtensionAPI) {
     const reserve = cfg?.modelOverrides?.[key]?.reserveTokens ?? cfg?.reserveTokens ?? 16384;
     const threshold = contextWindow ? `${((contextWindow-reserve)/contextWindow*100).toFixed(0)}%` : "?";
     parts.push(`ctx ${contextPercent}%`, `watch ${watch}`, `compact ${cfg?.enabled===false?"off":threshold}`);
-    parts.push(`cache ${latestCacheHitRate===undefined?"?":latestCacheHitRate.toFixed(0)+"%"}`);
+    // Session-cumulative cache hit rate, one decimal (99.2%, never rounded to 100%).
+    // No cached prompt tokens at all -> "?"; nothing reported by the provider -> omit.
+    const promptTotal = input + cacheRead + cacheWrite;
+    if (promptTotal > 0) {
+      parts.push(`cache ${cacheRead + cacheWrite > 0 ? ((cacheRead / promptTotal) * 100).toFixed(1) + "%" : "?"}`);
+    }
     while(parts.length>2 && visibleWidth(parts.join("  ·  "))>width) parts.pop();
     let statsLeft = truncateToWidth(parts.join("  ·  "),width,"…");
     let statsLeftWidth = visibleWidth(statsLeft);
@@ -194,7 +210,7 @@ export default function llmSpeed(pi: ExtensionAPI) {
 
 						// Line 3: extension statuses (plan / sandbox / git …), alphabetical.
 						const lines = [pwdLine, line2];
-            const telemetry = [latestSpeed===undefined?"":speedColor(latestSpeed,theme), cachedStats?.cost ? `$${cachedStats.cost.toFixed(3)}` : ""].filter(Boolean).join("  ·  ");
+            const telemetry = [latestSpeed!==undefined?speedColor(latestSpeed,theme):(speedUnknown?theme.fg("dim","t/s ?"):""), cachedStats?.cost ? `$${cachedStats.cost.toFixed(3)}` : ""].filter(Boolean).join("  ·  ");
 						const statuses = footerData.getExtensionStatuses();
 						if (statuses.size > 0) {
 							const statusLine = Array.from(statuses.entries())
@@ -217,19 +233,22 @@ export default function llmSpeed(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		sessionId = ctx.sessionManager.getSessionId(); watch="?"; watchSequence=-1; cachedStats=undefined;
+		resetStream();
     pi.events.emit("pi-subagents:watchdog-query:v1",{});
     if (ctx.mode === "tui" && enabled) mountFooter(ctx);
 	});
 
 	pi.on("message_start", async (event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		if (event.message.role === "assistant") { t0 = performance.now(); firstChunk = false; }
+		if (event.message.role === "assistant") { t0 = performance.now(); firstChunk = false; chunkCount = 0; }
 	});
 
 	pi.on("message_update", async (event, ctx) => {
 		if (ctx.mode !== "tui") return;
+		if (event.message.role !== "assistant") return;
 		// First streamed chunk: restart the clock to exclude time-to-first-token.
-		if (event.message.role === "assistant" && !firstChunk) { t0 = performance.now(); firstChunk = true; }
+		if (!firstChunk) { t0 = performance.now(); firstChunk = true; }
+		chunkCount++;
 	});
 
 	pi.on("message_end", async (event, ctx) => {
