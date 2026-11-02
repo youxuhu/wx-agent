@@ -19,7 +19,7 @@ python3 scripts/maintain.py verify --root "$HOME/.pi/agent"
 
 脚本需要 node/python/git 在 PATH。第一项覆盖用户轮次 undo/redo、真实会话导航、footer、桥、PDF、证据、输出/交接、Plan 限制和推送扫描。maintenance 测试隔离演练幂等安装、未知补丁拒绝和回滚冲突。LSP 测试需真实语言服务及本地进程 IPC，使用临时项目，不调用模型。`PI_LSP_TEST_ENTRY` 可指定已安装 pi-lsp 的入口。
 
-**可移植性限制**：现有 tests/ 多处引用原开发机路径，maintenance 测试也依赖当前运行目录的已装包。新机器必须先改测试的 SDK/Jiti/root 路径；不要直接把“找不到文件”当成功。measure.mjs 依赖旧临时候选路径，其历史 before 数据不能用已改动的环境重跑来覆盖。它不是跨平台基准工具。
+**路径解析**：测试共享 helpers.mjs 自动定位 Pi SDK/Jiti/TUI，可用 PI_CORE_DIR 指定特殊安装位置；PI_TEST_AGENT_DIR 指向测试依赖所在运行目录（默认 ~/.pi/agent）。LSP 测试默认加载该目录中已安装插件与本机配置，PI_LSP_TEST_ENTRY 可覆盖入口。维护演练仍需要已有精确版本包。measure.mjs 不再依赖临时目录，且拒绝重写历史 before 基线；实际模型/插件环境缺失仍需先配置。
 
 `runtime-package.json` 仅是保留的包元数据：当前根目录并无受跟踪的 package.json，因此首选上述直接脚本，不宣称 clone 后 npm test 可立即运行。
 
@@ -41,7 +41,7 @@ python3 scripts/maintain.py verify --root "$HOME/.pi/agent"
 python3 scripts/maintain.py rollback --backup /absolute/path/to/rollback.json
 ```
 
-install 先在临时副本预检补丁，再备份并原子写文件；异常恢复已备份内容，重复同样安装不写新状态。rollback 会核对安装后的 hash；后续有人工修改则停止，先保存和合并差异，不强行覆盖。全新机器使用其自己的 rollback manifest，不能使用原开发机的备份路径。回滚后 Pi `/reload` 并复核健康状态。回滚不会撤销网络/GUI/数据库操作，也不卸载额外 npm 缓存。
+install/rollback 使用同一目标目录的非阻塞操作系统锁防止并发。install 先汇总 Pi/Node/SDK、依赖 integrity、语言服务和目录可写性检查，在临时副本预检补丁，再备份并原子写文件；异常恢复已备份内容，重复同样安装不写新状态。rollback 会核对安装后的 hash；后续有人工修改则停止，先保存和合并差异，不强行覆盖。全新机器使用其自己的 rollback manifest，不能使用原开发机的备份路径。回滚后 Pi `/reload` 并复核健康状态。回滚不会撤销网络/GUI/数据库操作，也不卸载额外 npm 缓存。
 
 ## Git 发布
 
@@ -68,3 +68,14 @@ exec python3 "$(git rev-parse --show-toplevel)/scripts/pre-push-check.py" "$@"
 | runtime lock drift | 查清源码、依赖或逐机配置变化后再部署，勿直接改锁假装通过 |
 
 运行日志、完整输出和 handoff 可能含私有项目内容；保留在本机，不附到公开 issue。详尽开发文档不应加入 AGENTS.md 常驻提示，只留短链接。
+
+## 本轮可靠性修复
+
+- backups/ 和 Python 缓存忽略；pre-push 同时拒绝待推送历史里出现过的备份目录，即使后来已删除。新增备份目录权限 700、备份文件权限 600。
+- 运行 pi-lsp.json 为本机覆盖配置，不再提交；公共 config/pi-lsp.json 使用 PATH。已有配置不被部署模板覆盖。
+- 安装器排除 node_modules、构建产物和独立 piwebui，避免把缓存和未纳管 Web 项目同步到运行目录。
+- 输出检索流式读取、有界返回。单个输出最大 64 MiB；写入前检查现有 txt 文件数量（最多 1000 个）与总量（256 MiB），达到预算拒绝新增存储并保留原始工具结果，不自动清除会话引用。多会话同时写入可能短暂超出检查时预算；这是增长保护，不是文件系统硬配额。清理前请确认相关会话不再需要原文。
+- handoff 显示原会话文件、分支叶节点及用户消息 entry ID；内容截断明确标记，长用户要求同时保留头尾，提醒回查原会话。
+- Node 版本变化会由 verify 提示。特殊 Pi 包安装位置可设置 PI_CORE_DIR，必须指向真实 pi-coding-agent 包根目录。
+
+本轮验收（2026-11-02，Linux/WSL、Pi 1.4.0、Node 22.23.2）：离线运行时回归、安装预检失败不写配置、并发锁、逐机 LSP 保留、幂等安装/漂移拒绝/回滚保护、备份历史拒推、流式输出与预算、交接截断来源标记均通过；真实临时 TS 类型错误诊断通过。SDK 生命周期无错误，系统提示仍为 8,127 字符；没有真实模型调用，未声称完成其他平台实机验收。

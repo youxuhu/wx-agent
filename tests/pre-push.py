@@ -8,4 +8,5 @@ with tempfile.TemporaryDirectory(prefix='pi-push-test-') as t:
  def check(commit):return subprocess.run(['python3',str(script)],cwd=t,input=f'refs/heads/main {commit} refs/heads/main '+('0'*40)+'\n',text=True,capture_output=True)
  assert check(safe).returncode==0
  (p/'bad').write_text('api_key="'+'sk-'+('x'*24)+'"');git('add','.');git('commit','-qm','unsafe');git('rm','bad');git('commit','-qm','remove');result=check(git('rev-parse','HEAD'));assert result.returncode!=0;assert 'x'*24 not in result.stderr
+ git('reset','--hard',safe);(p/'backups').mkdir();(p/'backups/private').write_text('private config');git('add','.');git('commit','-qm','backup');git('rm','-r','backups');git('commit','-qm','remove backup');assert check(git('rev-parse','HEAD')).returncode!=0
  print('PASS: clean push allowed, earlier secret commit caught even after deletion, no secret echo.')

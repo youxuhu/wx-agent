@@ -6,7 +6,7 @@ Implemented the plan in PLAN-plugin-maintenance.md. No commits, pushes or model 
 
 pi-lens is removed from settings.packages. Its installed files and former dependencies remain cached for rollback, and its Skill manifest is not loaded. No lens automatic diagnostics/formatting/autofix runs in the new process.
 
-Retained packages are pinned: pi-web-access 0.46.0, rpiv-todo/rpiv-ask-user-question 2.15.0, pi-subagents 0.84.0, pi-btw 0.63.3. Added @narumitw/pi-lsp 0.49.11: two on-demand tools, no edit/turn diagnostic hook. Its language servers start per call and shut down afterward. Existing TypeScript/Pyright tools under ~/.pi-lens/tools are reused, not downloaded again. These binary paths are machine-local and must be adapted for another machine.
+Retained packages are pinned: pi-web-access 0.46.0, rpiv-todo/rpiv-ask-user-question 2.15.0, pi-subagents 0.84.0, pi-btw 0.63.3. Added @narumitw/pi-lsp 0.49.11: two on-demand tools, no edit/turn diagnostic hook. Its language servers start per call and shut down afterward. Existing TypeScript/Pyright tools under ~/.pi-lens/tools are reused, not downloaded again. Existing binary paths are preserved locally; the shared template now uses language-server commands from PATH.
 
 LSP diagnostic calls require explicit paths and limit 1..5. Fixes default to preview. Plan mode blocks lsp_fix. Project-native validation remains authoritative. Watchdog still follows the current model with low thinking, but its automatic LSP pre-pass is disabled. The seven 1M-window compaction overrides and default DeepSeek model remain unchanged.
 
@@ -63,3 +63,5 @@ Full SDK lifecycle load after replacement: no loader/lifecycle errors; no lens t
 Run `/reload` in Pi, then `/health`. Existing in-flight runs retain their loaded code until reload. If a project explicitly loads pi-lens through its own configuration, remove that override separately; global settings do not silently override an explicit project package.
 
 For cross-machine setup and known absolute-path limitations, see [MULTI-MACHINE.md](MULTI-MACHINE.md) and [MAINTENANCE.md](MAINTENANCE.md). Historical backup paths in this report apply only to the original machine.
+
+Reliability fixes: portable SDK/test resolution, preflight and deployment locks, preserved local LSP overrides, backup publication guards, streaming output lookup with storage budget, and explicit handoff truncation/source references. See MAINTENANCE.md for the current behavior.

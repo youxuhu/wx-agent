@@ -1,5 +1,5 @@
-import {createJiti} from '/home/revy/.nvm/versions/node/v22.23.2/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs';
-import assert from 'node:assert/strict';import {visibleWidth} from '/home/revy/.nvm/versions/node/v22.23.2/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/dist/index.js';
+import {createJiti} from './helpers.mjs';
+import assert from 'node:assert/strict';import {visibleWidth} from './helpers.mjs';
 const jiti=createJiti(import.meta.url);const {default:ext}=await jiti.import('../extensions/llm-speed/index.ts');const events=new Map();const bus=new Map();let renderer,scans=0;
 const usage={input:100,output:30,cacheRead:900,cacheWrite:0,cost:{total:.1}};
 const ctx={mode:'tui',model:{id:'deepseek-flash',provider:'deepseek',contextWindow:1000000,reasoning:true},thinkingLevel:'high',getContextUsage:()=>({percent:29,contextWindow:1000000}),sessionManager:{getSessionId:()=> 's',getCwd:()=> '/tmp/project',getSessionName:()=>'',getEntries:()=>{scans++;return [{type:'message',message:{role:'assistant',usage}}]}},ui:{setFooter:factory=>{renderer=factory({requestRender(){}},{fg:(_c,s)=>s},{onBranchChange:()=>()=>{},getGitBranch:()=> 'main',getExtensionStatuses:()=>new Map([['plan','build']]),getAvailableProviderCount:()=>1})}}};

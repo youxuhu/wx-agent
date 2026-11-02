@@ -62,7 +62,6 @@
     "+codemode",
     "+tool_search"
   ],
-  "deviceId": "eaa700ba-83f1-4d40-a033-463eaa275fb0",
   "compaction": {
     "enabled": true,
     "modelOverrides": {

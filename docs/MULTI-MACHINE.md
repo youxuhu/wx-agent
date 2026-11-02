@@ -1,6 +1,6 @@
 # 跨机器部署
 
-这是受控迁移流程，不是“一条命令完整重建”。当前仍存在语言服务和测试中的本机绝对路径；需按下面步骤适配。不要在已有 `~/.pi/agent` 上直接 clone/覆盖。
+这是受控迁移流程，不是“一条命令完整重建”。核心和测试路径已自动解析；语言服务仍需逐机安装并配置。不要在已有 `~/.pi/agent` 上直接 clone/覆盖。
 
 ## 1. 准备独立源码与逐机依赖
 
@@ -16,7 +16,7 @@ pi --version
 
 ## 2. 创建运行目录并安装精确插件
 
-先备份已有运行目录。新机器可创建 `~/.pi/agent`，将源码 `settings.json` 复制过去作为初始配置（已有机器则手动合并，别覆盖个人设置）。删除模板中的旧 deviceId，让 Pi 生成本机标识。安装模板 packages 中逐个完整的 `npm:名称@版本`：
+先备份已有运行目录。新机器可创建 `~/.pi/agent`，将源码 `settings.json` 复制过去作为初始配置（已有机器则手动合并，别覆盖个人设置）。根 settings.json 若有旧 deviceId 请删除，让 Pi 生成本机标识；config/settings.json 模板不含 deviceId。安装模板 packages 中逐个完整的 `npm:名称@版本`：
 
 ```sh
 pi install npm:pi-web-access@0.46.0
@@ -31,7 +31,7 @@ pi install npm:@narumitw/pi-lsp@0.49.11
 
 ## 3. 适配路径，然后部署
 
-编辑源码的 `config/pi-lsp.json`：把 `/home/revy/.pi-lens/tools/...` 改为这台机器实际的 TypeScript/Pyright 语言服务路径。旧目录名仅因复用已有工具，不表示需要重新启用 pi-lens。新机器可自行安装这些服务并填写其绝对入口；不需要的语言删去。确认 node、服务入口、tsserver 路径均可用。
+`config/pi-lsp.json` 默认从 PATH 查找 typescript-language-server / pyright-langserver。安装所需语言服务及 TypeScript；不需要的语言从配置删去。也可在目标 `~/.pi/agent/pi-lsp.json` 写本机绝对路径和 tsserver 路径。安装器优先保留目标已有配置，新机器没有该文件时才使用模板；预检会核对服务命令、显式 JS 入口和 tsserver 文件。不要将逐机路径写回公共模板。本机仍可继续使用 ~/.pi-lens/tools 中的旧服务，无需启用 lens。
 
 检查 computer-use 的系统后端、桌面权限；sandbox/policy 的路径和网络规则逐机配置，不关闭安全限制来绕过配置错误。保留个人配置适配在本地，不提交凭据。
 
@@ -55,4 +55,4 @@ python3 scripts/maintain.py verify --root "$HOME/.pi/agent"
 | 插件精确版本要求 | npm/、语言服务、平台依赖 |
 | 维护策略 | sessions、checkpoint-v2、verification、outputs、handoffs、缓存、备份、maintenance-lock |
 
-已有配置中的本机路径尚未全部参数化；部分测试也硬编码 `/home/revy`、Pi 安装路径及临时 LSP 包位置。跨机器运行前阅读并适配测试，路径失败不能声称回归通过。不能将这套文档理解为已在 Windows 原生、macOS、所有 Linux 发行版全面验收。
+测试通过 helpers.mjs 自动定位 Pi SDK/Jiti/TUI，不再绑定原开发机路径或临时候选包。特殊安装可设置 PI_CORE_DIR；测试运行目录可用 PI_TEST_AGENT_DIR 指定，LSP 测试使用该目录的 pi-lsp.json。measure.mjs 仍依赖实际安装插件及模型环境，不是独立通用基准。不能将这套文档理解为已在 Windows 原生、macOS、所有 Linux 发行版全面验收。

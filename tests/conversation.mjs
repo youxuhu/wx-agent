@@ -1,4 +1,4 @@
-import {createJiti} from '/home/revy/.nvm/versions/node/v22.23.2/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib/jiti.mjs';
+import {createJiti} from './helpers.mjs';
 import {promises as fs} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';import assert from 'node:assert/strict';import {git} from '../extensions/checkpoint/engine.mjs';
 const root=await fs.mkdtemp(join(tmpdir(),'pi-conversation-'));process.env.PI_CODING_AGENT_DIR=join(root,'agent');
 try{

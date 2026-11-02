@@ -11,10 +11,13 @@ try:
   if set(remote)!={'0'}:revisions.append('^'+remote)
   else:revisions+=['--not','--remotes']
   for commit in git('rev-list',*revisions).splitlines():
+   added_files=git('diff-tree','--root','--no-commit-id','--name-only','-r','--diff-filter=A',commit).splitlines()
+   if any('backups' in p.split('/') for p in added_files):raise ValueError('Private deployment backup in an outgoing commit')
    for added in git('show','--format=','--root','--no-ext-diff',commit).splitlines():
     if not added.startswith('+') or added.startswith('+++'):continue
     if any(re.search(p,added) for p in patterns):raise ValueError('Possible credential in an outgoing commit')
   files=git('ls-tree','-r','--name-only',local).splitlines()
+  if any('backups' in p.split('/') for p in files):raise ValueError('Private deployment backup tracked by outgoing revision')
   if any(re.search(r'(^|/)(auth\.json|web-search\.json|\.env|\.git-credentials)$',p) for p in files):raise ValueError('Credential file tracked by outgoing revision')
 except Exception as e:
  print('pre-push: BLOCKED; '+(str(e) if isinstance(e,ValueError) else 'could not verify outgoing history'),file=sys.stderr);sys.exit(1)

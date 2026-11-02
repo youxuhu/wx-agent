@@ -42,3 +42,9 @@ handoffs/
 maintenance-candidates.json
 
 maintenance-lock.json
+
+backups/
+
+__pycache__/
+
+/pi-lsp.json

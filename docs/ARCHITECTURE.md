@@ -14,7 +14,7 @@
 | `scripts/pre-push-check.py` | 扫描所有待推送提交，阻止已知凭据模式和敏感文件 |
 | `scripts/install.py` | 旧入口，转调 maintain.py install |
 | `scripts/test.py`、`tests/` | 离线回归；LSP、维护演练另有测试入口 |
-| `config/` | 部署模板；pi-lsp.json 含需逐机适配的路径 |
+| `config/` | 部署模板；pi-lsp.json 使用 PATH，本机路径在运行目录覆盖 |
 | `settings.json` | 实际启用插件、默认模型、压缩及监督配置 |
 | `patches/watchdog.json` | 固定版本/chunk/原始 SHA256 的兼容基线 |
 | `runtime-package.json` | 维护包元数据与脚本说明；不是 npm 自动识别的 package.json |

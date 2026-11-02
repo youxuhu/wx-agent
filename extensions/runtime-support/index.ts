@@ -37,7 +37,7 @@ export default function runtimeSupport(pi:ExtensionAPI){
   pi.registerCommand('handoff',{description:'Save a bounded task handoff from the current branch, optionally with an explicit continuation note',handler:async(note,ctx)=>{
     if(!ctx.isIdle()){ctx.ui.notify('Wait for the current run before creating a handoff.','warning');return}
     const outputs=await recentOutputs(ctx.sessionManager.getSessionId());const evidence=(await readState(ledger(ctx))).turns;
-    const text=buildHandoff(ctx.sessionManager.getBranch(),{sessionId:ctx.sessionManager.getSessionId(),cwd:ctx.cwd,note,verification:evidence,outputs});
+    const text=buildHandoff(ctx.sessionManager.getBranch(),{sessionId:ctx.sessionManager.getSessionId(),sessionFile:ctx.sessionManager.getSessionFile?.(),leafId:ctx.sessionManager.getLeafId?.(),cwd:ctx.cwd,note,verification:evidence,outputs});
     const dir=join(ROOT,'handoffs');await fs.mkdir(dir,{recursive:true,mode:0o700});
     const path=join(dir,`${Date.now()}-${createHash('sha256').update(ctx.sessionManager.getSessionId()).digest('hex').slice(0,10)}.md`);
     await fs.writeFile(path,text,{mode:0o600});ctx.ui.notify(`Handoff saved: ${path}\nStart a new session and read this file to continue.`,'info');
