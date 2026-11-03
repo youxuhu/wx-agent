@@ -1,8 +1,8 @@
 import {ModelRuntime, type ExtensionAPI} from '@earendil-works/pi-coding-agent';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
-import {installTui} from './tui.mjs';
-import {createCaller} from './caller.mjs';
+import {installTui} from '../../extensions/inner-loop/tui.mjs';
+import {createCaller} from '../../extensions/inner-loop/caller.mjs';
 
 export const install=installTui;
 export default function(pi:ExtensionAPI){

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {AsyncLocalStorage} from 'node:async_hooks';
-import frozen from '../../experiments/inner-loop/evidence/summary.json' with {type:'json'};
+import frozen from './baseline.json' with {type:'json'};
 export const purposeScope=new AsyncLocalStorage();
 export class Ledger {
  constructor(dir,options={}){this.dir=dir;this.file=join(dir,'budget.json');this.inherit=options.inherit??true;fs.mkdirSync(dir,{recursive:true,mode:0o700});const path=join(dir,'runtime-policy.json');const defaults={maxCalls:2048,maxTokens:2000000,maxUsd:1};let configured=fs.existsSync(path)?JSON.parse(fs.readFileSync(path,'utf8')):defaults;this.limits={};for(const key of Object.keys(defaults)){const value=options[key]??configured[key]??defaults[key];if(!Number.isFinite(value)||value<0||key!=='maxUsd'&&!Number.isSafeInteger(value))throw Error('Invalid budget policy');this.limits[key]=value}if(!fs.existsSync(path))fs.writeFileSync(path,JSON.stringify(this.limits,null,2)+'\n',{flag:'wx',mode:0o600})}

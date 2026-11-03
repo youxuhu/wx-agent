@@ -11,13 +11,16 @@ try{
  app=await createAssistant(options);await bind();await app.loop.wait();
  assert.equal(app.loop.state.steps,5);assert.equal(app.loop.state.messages,3);assert.equal(app.loop.state.reason,'complete');
  assert.deepEqual(app.runtime.session.getActiveToolNames(),['read','write','list','web_search','fetch_content','get_search_content','memory_recall']);assert.deepEqual(app.runtime.services.resourceLoader.getAgentsFiles().agentsFiles,[]);assert(!app.runtime.session.systemPrompt.includes('UNRELATED PRIVATE'));
- const file=app.runtime.session.sessionFile;let saved=sdk.SessionManager.open(file);assert.equal(saved.getBranch().filter(e=>e.type==='custom_message'&&e.customType==='inner-initiative').length,3);assert(!saved.getBranch().some(e=>e.type==='message'),'startup speech has no fabricated user or assistant turn');
+ // Session files only exist after the first user/assistant turn (pi's own persistence rule); startup initiatives live in the authoritative in-memory branch until then.
+ const branch=()=>app.runtime.session.sessionManager.getBranch();
+ assert.equal(branch().filter(e=>e.type==='custom_message'&&e.customType==='inner-initiative').length,3);assert(!branch().some(e=>e.type==='message'),'startup speech has no fabricated user or assistant turn');
+ const file=app.runtime.session.sessionFile;
  await app.runtime.session.prompt('第一次实际聊天。');assert.equal(app.runtime.session.getLastAssistantText(),'我听到了，我们可以接着聊。');
  await assert.rejects(()=>createAssistant(options),/另一个进程/);
  await app.runtime.dispose();app=null;
  app=await createAssistant({...options,autoStart:false});await bind();assert.equal(app.runtime.session.sessionFile,file);assert.equal(app.loop.state.messages,3);
  await app.runtime.session.prompt('我们继续聊聊。');assert.equal(app.runtime.session.getLastAssistantText(),'我听到了，我们可以接着聊。');
  const denied=await app.runtime.session.extensionRunner.emitUserBash({type:'user_bash',command:'echo must-not-run',excludeFromContext:false,cwd:app.cwd});assert.equal(denied.result.exitCode,1);
- saved=sdk.SessionManager.open(file);assert.equal(saved.getBranch().filter(e=>e.type==='custom_message').length,3);assert(saved.getBranch().some(e=>e.type==='message'&&e.message.role==='assistant'));
+ let saved=sdk.SessionManager.open(file);assert.equal(saved.getBranch().filter(e=>e.type==='custom_message').length,3);assert(saved.getBranch().some(e=>e.type==='message'&&e.message.role==='assistant'));
  console.log('PASS: real SDK startup without input -> five actions/three persisted messages; exclusive profile; reopen -> ordinary chat preserves initiative; own-folder tools; no coding context; shell denied.');
 }finally{await app?.runtime.dispose();await rm(root,{recursive:true,force:true})}

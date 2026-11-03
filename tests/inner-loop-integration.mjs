@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {sdk,createJiti,agentDir,core,initTheme} from './helpers.mjs';
 import {pathToFileURL} from 'node:url';
 import {createCaller} from '../extensions/inner-loop/caller.mjs';
-const {install}=await createJiti(import.meta.url,{alias:{'@earendil-works/pi-coding-agent':join(core,'dist/index.js')}}).import('../extensions/inner-loop/index.ts');
+const {install}=await createJiti(import.meta.url,{alias:{'@earendil-works/pi-coding-agent':join(core,'dist/index.js')}}).import('../experiments/inner-loop/pi-tui-extension-entry.ts');
 const paid=process.argv.includes('--execute');
 const root=await mkdtemp(join(tmpdir(),'inner-loop-sdk-'));
 let session,controller,resolveCall,delay=false,calls=0,editor='';

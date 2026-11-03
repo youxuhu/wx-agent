@@ -1,0 +1,8 @@
+{
+  "note": "Conservative ledger baseline inherited from the frozen inner-loop study (sha256 0f59dfc7634e588ddc89589f4ace745b6a3c0f7ff36fd278603f8ad0e79af62d). Calls/tokens/usd are accounting units, not a provider bill.",
+  "conservativeBudget": {
+    "calls": 74,
+    "tokens": 31922,
+    "usd": 0.0285492
+  }
+}
