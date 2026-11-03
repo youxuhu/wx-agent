@@ -2,6 +2,10 @@
 
 ## Change memory
 
+- [目的] 汇总独立TUI助手的长期记忆、上下文压缩、联网、read/write与沙盒复用总plan。
+  做法：核对已装pi-web-access 0.46.0的无界面core、Pi工具operations/压缩hook及现有sandbox边界，提出文件记忆+Orama、事件晋升、压缩前补查和受限工具worker；仅文档，未启用新权限或花费。
+- issue: 现有sandbox只包装bash，不能替宿主Node读写/fetch自动提供内核隔离；原插件初始化失败可回落未沙盒执行及GUI例外不能照搬到助手。minepi插件总览版本已旧，以实际安装源码为准。
+
 - [目的] 按用户轻量化偏好补充现代记忆后端选型，修订主候选为文件日志+Orama，LanceDB备选。
   做法：核对Letta/Mem0/Orama/LanceDB官方资料与npm元数据，区分TS核心和平台原生包体积；补中文分词、可重建索引和文件崩溃恢复设计，仅文档，无安装或付费模型调用。
 
