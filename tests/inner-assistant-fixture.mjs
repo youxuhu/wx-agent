@@ -3,10 +3,11 @@ import {core} from './helpers.mjs';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 const {createAssistantMessageEventStream}=await import(pathToFileURL(join(core,'node_modules/@earendil-works/pi-ai/dist/index.js')).href);
-export async function fixture(sdk,root){
+export async function fixture(sdk,root,options={}){
  const rt=await sdk.ModelRuntime.create({authPath:join(root,'auth.json'),modelsPath:null,modelsStorePath:join(root,'models.json'),allowModelNetwork:false,refreshOnCreate:false});
- rt.registerProvider('inner-fixture',{baseUrl:'https://fixture.invalid',api:'inner-fixture-api',apiKey:'synthetic',models:[{id:'conversation',name:'Local fixture',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:8192,maxTokens:512}],streamSimple:(model)=>{
-  const s=createAssistantMessageEventStream(),m={role:'assistant',api:model.api,provider:model.provider,model:model.id,content:[{type:'text',text:'我听到了，我们可以接着聊。'}],stopReason:'stop',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};queueMicrotask(()=>{s.push({type:'start',partial:m});s.push({type:'done',reason:'stop',message:m});s.end()});return s;
+ rt.registerProvider('inner-fixture',{baseUrl:'https://fixture.invalid',api:'inner-fixture-api',apiKey:'synthetic',models:[{id:'conversation',name:'Local fixture',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:options.contextWindow??8192,maxTokens:options.maxTokens??512}],streamSimple:(model,context,request)=>{
+  options.capture?.({model,context,request});const custom=options.result?.(context)??{};
+  const s=createAssistantMessageEventStream(),m={role:'assistant',api:model.api,provider:model.provider,model:model.id,content:custom.content??[{type:'text',text:custom.text??'我听到了，我们可以接着聊。'}],stopReason:custom.stopReason??'stop',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};queueMicrotask(()=>{s.push({type:'start',partial:m});s.push({type:'done',reason:m.stopReason,message:m});s.end()});return s;
  }});return rt;
 }
 export function activity(){let index=0;const messages=['我在试写一个门把手的故事。',null,'我给故事加了一次轻轻敲门。',null,'故事里它终于等到了回应。'];return async system=>{

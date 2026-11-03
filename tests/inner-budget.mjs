@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';import{mkdtemp,rm,readFile,unlink}from'node:fs/promises';import{join}from'node:path';import{tmpdir}from'node:os';import{Ledger,wrapRuntime,purposeScope}from'../assistants/inner/budget.mjs';import{fixture}from'./inner-assistant-fixture.mjs';import{loadPi}from'../assistants/inner/runtime.mjs';
+const root=await mkdtemp(join(tmpdir(),'inner-budget-test-'));
+try{
+ const l=new Ledger(join(root,'ledger'),{inherit:false,maxCalls:3,maxUsd:1,maxTokens:10000});const r=l.reserve('explore',1000,200,{input:.3,output:1.2});l.settle(r,{input:500,output:80});assert.equal(l.read().tokens,580);assert.throws(()=>l.settle(r,{input:1,output:1}),/already/);
+ l.reserve('review',100,200,{input:.3,output:1.2});assert.equal(l.read().calls,2);l.external('search',.0015);assert.throws(()=>l.reserve('memory',100,50,{input:.3,output:1.2}),/exhausted/);l.reserve('chat',100,50,{input:.3,output:1.2});assert.equal(l.read().chat.calls,1);assert.equal(l.read().calls,3);
+ const over=new Ledger(join(root,'over'),{inherit:false});const o=over.reserve('review',10,10,{input:.3,output:1.2});assert.throws(()=>over.settle(o,{input:100,output:100}),/exceeded/);assert(over.read().blocked);assert.throws(()=>over.reserve('review',1,1,{input:.3,output:1.2}),/exhausted/);
+ const {sdk,createAssistantMessageEventStream}=await loadPi();const rt=await fixture(sdk,root);const isolated=new Ledger(join(root,'streams'),{inherit:false});const restore=wrapRuntime(rt,{ledger:isolated,makeStream:createAssistantMessageEventStream});const model=rt.getModel('inner-fixture','conversation');
+ await purposeScope.run('compact-history',async()=>{const s=rt.streamSimple(model,{messages:[]});for await(const _ of s){}assert.equal((await s.result()).stopReason,'stop')});assert.equal(isolated.read().byPurpose['compact-history'].calls,1);restore();
+ console.log('PASS: request reservations, actual settlement, unknown retention, inherited limits, separate chat accounting, external requests, durable overrun lock and streamed terminal usage.');
+}finally{await rm(root,{recursive:true,force:true})}

@@ -2,6 +2,10 @@
 
 ## Change memory
 
+- [目的] 落实独立TUI助手的来源记忆、64k/128k原生压缩调度、受限联网/读写与工具沙盒，游戏测试暂缓。
+  做法：文件校验日志+Orama中文检索、事件筛选/长文待办/遗忘屏障、按用途预算与摘要输出、结构化OS沙盒worker复用pi-web-access；真实PTY/内核/SDK压缩/公网和有限真实模型验证，沿用累计账本129次，普通聊天另计。见 experiments/inner-loop/upgrade-report.md。
+- issue: npm安装必须用助手目录绝对--prefix；错误cwd曾移除根下六个SDK软链，已恢复并全量回归。fake-IP抓取用固定DoH+私网校验+连接IP固定，worker单独设置私有TMPDIR；PTY须等InteractiveMode.init完成再输入，页脚出现不是就绪信号。
+
 - [目的] 按用户64k/128k偏好规划复用Pi原生压缩，替换总plan的12k/9k起点。
   做法：核对原生增量摘要、近期原文切点、split-turn前缀和失败提交语义，设计本地容量调度+记忆补查+用途费用路由；仅计划，无运行改动。
 - issue: 助手全局maxTokens<=512会误伤原生压缩；split-turn可能发生两次摘要请求。reserveTokens是模型窗口预留，不是摘要长度；手动compact会先abort当前运行，须在安全边界调度。

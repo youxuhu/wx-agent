@@ -10,7 +10,7 @@ try{
  const bind=()=>app.runtime.session.bindExtensions({mode:'tui',uiContext:{notify(){},getEditorText:()=>'',setStatus(){},onTerminalInput:()=>()=>{}}});
  app=await createAssistant(options);await bind();await app.loop.wait();
  assert.equal(app.loop.state.steps,5);assert.equal(app.loop.state.messages,3);assert.equal(app.loop.state.reason,'complete');
- assert.deepEqual(app.runtime.session.getActiveToolNames(),['play_list','play_read','play_write']);assert.deepEqual(app.runtime.services.resourceLoader.getAgentsFiles().agentsFiles,[]);assert(!app.runtime.session.systemPrompt.includes('UNRELATED PRIVATE'));
+ assert.deepEqual(app.runtime.session.getActiveToolNames(),['read','write','list','web_search','fetch_content','get_search_content','memory_recall']);assert.deepEqual(app.runtime.services.resourceLoader.getAgentsFiles().agentsFiles,[]);assert(!app.runtime.session.systemPrompt.includes('UNRELATED PRIVATE'));
  const file=app.runtime.session.sessionFile;let saved=sdk.SessionManager.open(file);assert.equal(saved.getBranch().filter(e=>e.type==='custom_message'&&e.customType==='inner-initiative').length,3);assert(!saved.getBranch().some(e=>e.type==='message'),'startup speech has no fabricated user or assistant turn');
  await app.runtime.session.prompt('第一次实际聊天。');assert.equal(app.runtime.session.getLastAssistantText(),'我听到了，我们可以接着聊。');
  await assert.rejects(()=>createAssistant(options),/另一个进程/);

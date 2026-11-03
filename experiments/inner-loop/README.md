@@ -8,6 +8,8 @@ pi-chat
 
 当前独立助手使用 `assistants/inner/play-loop.mjs` 与 `playground.mjs`。下面旧 coding-agent 扩展的多模式命令仍保留兼容，**不是本 demo 的操作入口**。原冻结研究没有修改或重新付费执行。
 
+当前已加入文件记忆+Orama、64k/128k原生压缩调度、受限read/write、联网搜索与工具沙盒；游戏测试暂缓。实现与验证边界见[改造报告](upgrade-report.md)。
+
 ## 可复用的 TUI 扩展
 
 `extensions/inner-loop/` 保留历史适配器及共用预算/注意力组件；旧 Pi TUI 扩展入口：

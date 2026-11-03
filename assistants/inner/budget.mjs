@@ -1,0 +1,32 @@
+import * as fs from 'node:fs';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import frozen from '../../experiments/inner-loop/evidence/summary.json' with {type:'json'};
+export const purposeScope=new AsyncLocalStorage();
+export class Ledger {
+ constructor(dir,options={}){this.dir=dir;this.file=join(dir,'budget.json');this.inherit=options.inherit??true;fs.mkdirSync(dir,{recursive:true,mode:0o700});const path=join(dir,'runtime-policy.json');const defaults={maxCalls:2048,maxTokens:2000000,maxUsd:1};let configured=fs.existsSync(path)?JSON.parse(fs.readFileSync(path,'utf8')):defaults;this.limits={};for(const key of Object.keys(defaults)){const value=options[key]??configured[key]??defaults[key];if(!Number.isFinite(value)||value<0||key!=='maxUsd'&&!Number.isSafeInteger(value))throw Error('Invalid budget policy');this.limits[key]=value}if(!fs.existsSync(path))fs.writeFileSync(path,JSON.stringify(this.limits,null,2)+'\n',{flag:'wx',mode:0o600})}
+ transaction(fn){const lock=join(this.dir,'budget.lock');const fd=fs.openSync(lock,'wx',0o600);try{if(!fs.existsSync(this.file)&&fs.existsSync(join(this.dir,'requests.jsonl')))throw Error('Budget state missing; recover it before spending');let s=fs.existsSync(this.file)?JSON.parse(fs.readFileSync(this.file,'utf8')):{calls:0,tokens:0,usd:0,blocked:false};for(const k of ['calls','tokens','usd']){if(!Number.isFinite(s[k])||s[k]<0)throw Error('Invalid budget ledger');if(this.inherit)s[k]=Math.max(s[k],frozen.conservativeBudget[k])}s.chat??={calls:0,tokens:0,usd:0};s.byPurpose??={};const out=fn(s);const tmp=this.file+'.tmp';const stateFd=fs.openSync(tmp,'w',0o600);try{fs.writeFileSync(stateFd,JSON.stringify(s,null,2)+'\n');fs.fsyncSync(stateFd)}finally{fs.closeSync(stateFd)}fs.renameSync(tmp,this.file);return out}finally{fs.closeSync(fd);fs.unlinkSync(lock)}}
+ reserve(purpose,input,output,prices,model=null){if(!Number.isSafeInteger(input)||input<1||!Number.isSafeInteger(output)||output<1)throw Error('Invalid reservation');if(!prices)throw Error('Unknown model price');const p={input:prices.input,output:prices.output};if([p.input,p.output].some(n=>!Number.isFinite(n)||n<0))throw Error('Unknown model price');const r={id:randomUUID(),purpose,model,input,output,tokens:input+output,usd:2*(input*p.input+output*p.output)/1e6,prices:p};return this.transaction(s=>{const target=purpose==='chat'?s.chat:s;if(purpose!=='chat'&&(s.blocked||target.calls+1>this.limits.maxCalls||target.tokens+r.tokens>this.limits.maxTokens||target.usd+r.usd>this.limits.maxUsd))throw Error('Background budget exhausted');target.calls++;target.tokens+=r.tokens;target.usd+=r.usd;const v=s.byPurpose[purpose]??={calls:0,tokens:0,usd:0};v.calls++;v.tokens+=r.tokens;v.usd+=r.usd;this.log({...r,status:'reserved'});return r})}
+ settle(r,usage){if(r.settled)throw Error('Reservation already settled');r.settled=true;const input=usage?.input,output=usage?.output;if(!Number.isSafeInteger(input)||input<0||!Number.isSafeInteger(output)||output<0)return;
+ const overrun=this.transaction(s=>{const target=r.purpose==='chat'?s.chat:s;const tokens=input+output,usd=2*(input*r.prices.input+output*r.prices.output)/1e6;const dt=tokens-r.tokens,dc=usd-r.usd;target.tokens+=dt;target.usd=Math.max(0,target.usd+dc);const v=s.byPurpose[r.purpose];v.tokens+=dt;v.usd=Math.max(0,v.usd+dc);if(dt>0||dc>1e-10){s.blocked=true;this.log({id:r.id,status:'overrun',input,output});return true}this.log({id:r.id,purpose:r.purpose,status:'settled',input,output,usd});return false});if(overrun)throw Error('Provider exceeded reservation')}
+ external(purpose,usd){return this.transaction(s=>{if(s.blocked||s.calls+1>this.limits.maxCalls||s.usd+usd>this.limits.maxUsd)throw Error('Background budget exhausted');const r={id:randomUUID(),purpose,usd};s.calls++;s.usd+=usd;const v=s.byPurpose[purpose]??={calls:0,tokens:0,usd:0};v.calls++;v.usd+=usd;this.log({...r,status:'external-reserved'});return r})}
+ finishExternal(r){this.log({...r,status:'external-completed'})}
+ log(v){fs.appendFileSync(join(this.dir,'requests.jsonl'),JSON.stringify({...v,time:new Date().toISOString()})+'\n',{mode:0o600})}
+ read(){return fs.existsSync(this.file)?JSON.parse(fs.readFileSync(this.file,'utf8')):null}
+}
+export function wrapRuntime(rt,{ledger,makeStream,getPurpose=()=>purposeScope.getStore()??'chat',contextLimit=()=>131072}){
+ const original=rt.streamSimple.bind(rt);rt.streamSimple=(model,context,options={})=>{
+  const purpose=getPurpose(),cap=purpose==='compact-prefix'?2048:purpose==='compact-history'?4096:purpose.startsWith('compact')?6144:purpose==='memory'?1024:purpose==='review'?256:purpose==='explore'?768:1024;
+  const maxTokens=Math.min(options.maxTokens??cap,cap,model.maxTokens??cap),stream=makeStream();
+  const task=(async()=>{let reservation;try{
+   if(options.signal?.aborted)throw Error('Cancelled before request');const input=Buffer.byteLength(JSON.stringify(context))+1024;
+   if(purpose==='chat'&&input>contextLimit()*4)throw Error('Context needs compaction before another request');
+   reservation=ledger.reserve(purpose,input,maxTokens,model.cost,model.provider+'/'+model.id);
+   const source=original(model,context,{...options,maxTokens,maxRetries:0,onPayload:async p=>{const adjusted=await options.onPayload?.(p)??p;const bytes=Buffer.byteLength(JSON.stringify({messages:adjusted.messages,tools:adjusted.tools}))+256;if(bytes>input)throw Error('Wire input exceeds reserved bound');return adjusted},signal:AbortSignal.any([...(options.signal?[options.signal]:[]),AbortSignal.timeout(60000)])});
+   let finalEvent;for await(const event of source){if(event.type==='done'||event.type==='error')finalEvent=event;else stream.push(event)}
+   const result=await source.result();if(!['error','aborted'].includes(result.stopReason)){const u=result.usage;ledger.settle(reservation,u?{input:u.input+u.cacheRead+u.cacheWrite,output:u.output}:null)}
+   if(finalEvent)stream.push(finalEvent);else throw Error('Provider returned no terminal event');stream.end();
+  }catch(error){const message={role:'assistant',api:model.api,provider:model.provider,model:model.id,content:[],stopReason:'error',errorMessage:error.message,timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};stream.push({type:'error',reason:'error',error:message});stream.end()}})();task.catch(()=>{});return stream;
+ };return ()=>{rt.streamSimple=original};
+}

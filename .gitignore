@@ -53,3 +53,7 @@ __pycache__/
 !lsp/package.json
 !lsp/package-lock.json
 logs/
+
+# Standalone assistant dependencies are pinned; install tree stays local.
+!assistants/inner/package.json
+!assistants/inner/package-lock.json
