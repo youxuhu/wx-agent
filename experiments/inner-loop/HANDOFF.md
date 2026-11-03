@@ -1,5 +1,11 @@
 # Codex 交接：Inner Loop 主动聊天探索原型
 
+## 最新：独立聊天与动态活动 demo（优先于下方历史记录）
+
+用户已批准简化为单一独立 TUI 聊天助手，给它自己的文字活动文件夹，自主判断继续和开口，不固定三步或一条消息。本机 `pi-chat` 默认即启用；`/stop` 停当前活动，`/about` 查看目录。使用公开 Pi SDK，独立 profile，三个限域文件工具，无 Shell/GUI/定时器，不加载原项目资源。
+
+实现与使用见 [助手 README](../../assistants/inner/README.md)，真实新 TUI 的 6 动作/2消息、两个语义审查例子、全部失败和限制见 [本轮报告](assistant-report.md)。累计 119 次、50,434 tokens、保守 US$0.04668；冻结 48 场景未重跑、人评未填。旧多模式扩展保留兼容，但不是新 demo 的入口。Git 提交状态以实际历史为准。
+
 ## 最新范围与 TUI 第二阶段
 
 用户明确要求只处理 TUI，不处理 GUI；本轮 Web 改动和构建产物已撤回。当前新增事件驱动 shadow、显式后续材料授权、自然表达规则及 prepare/show/say 的用户确认一次发送；TUI 注意力信号不足时不启用无人确认 active。真实交互式终端 regular/fullscreen 与真实模型两调用验证已完成。累计账本 80 次、33,826 tokens、保守 US$0.0303072；不清除撤回代码前的请求费用。详见 [tui-v2-report.md](tui-v2-report.md) 及更新后的 README。下面是先前阶段记录，以此段为准。

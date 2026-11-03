@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {sdk} from './helpers.mjs';
+import {installTui} from '../extensions/inner-loop/tui.mjs';
+import {observeTerminalAttention,isTerminalRelease} from '../extensions/inner-loop/attention.mjs';
+const input=new EventEmitter();input.isTTY=true;let interrupts=0;
+const attention=observeTerminalAttention(()=>interrupts++,input);
+attention.noteInteraction();input.emit('data','\x1b[');input.emit('data','O');assert.equal(attention.focused,false);assert.equal(interrupts,1);
+input.emit('data','\x1b[I');assert.equal(attention.focused,true);assert.equal(interrupts,1);
+input.emit('data','\x1b[<64;10;10M');assert.equal(interrupts,2);attention.dispose();assert.equal(input.listenerCount('data'),0);
+assert(isTerminalRelease('\x1b[13;1:3u'));assert(!isTerminalRelease('x'));
+const root=await mkdtemp(join(tmpdir(),'inner-auto-sdk-'));
+let session,core,calls=0,editor='',rawInput,resolveCall,delay=false,hold=false;
+const wait=async f=>{for(let i=0;i<500;i++){if(f())return;await new Promise(r=>setTimeout(r,10))}throw Error('Auto SDK timeout')};
+try{
+ const settings=sdk.SettingsManager.inMemory({defaultTools:[]});
+ const loader=new sdk.DefaultResourceLoader({cwd:root,agentDir:root,settingsManager:settings,noContextFiles:true,noSkills:true,noPromptTemplates:true,disabledBuiltinExtensions:['mcp'],extensionFactories:[pi=>{core=installTui(pi,async(system,text)=>{
+  calls++;if(!system.includes('"action"'))return {decision:hold?'hold':'speak',reason:'Synthetic value judgment'};
+  const notes=JSON.parse(text).memory.notes.slice(-1);
+  const step={action:'connect',focus:notes.map(n=>n.id),candidate:{text:'可以考虑让雨水收集为庭院浇灌供水。',kind:'inference',refs:notes.map(n=>({id:n.id,quote:n.text.slice(0,20)}))},next:null};
+  if(delay)return new Promise(resolve=>{resolveCall=()=>resolve(step)});return step;
+ })}]});await loader.reload();assert.deepEqual(loader.getExtensions().errors,[]);
+ const sm=sdk.SessionManager.create(root,join(root,'sessions'));
+ sm.appendMessage({role:'assistant',content:[{type:'text',text:'Synthetic saved conversation.'}],api:'openai-completions',provider:'deepseek',model:'deepseek-flash',stopReason:'stop',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}});
+ ({session}=await sdk.createAgentSession({cwd:root,agentDir:root,settingsManager:settings,resourceLoader:loader,sessionManager:sm,tools:[]}));
+ await session.bindExtensions({mode:'tui',uiContext:{notify(){},getEditorText:()=>editor,setStatus(){},onTerminalInput:fn=>{rawInput=fn;return ()=>{rawInput=null}}}});
+ const command=text=>session.prompt('/inner-loop '+text);
+ const start=async(text,source='interactive')=>{
+  await session.extensionRunner.emitInput(text,undefined,source);
+  await session.extensionRunner.emitBeforeAgentStart({messageType:'user',prompt:text},session._baseSystemPromptOptions);
+ };
+ const settle=()=>session.extensionRunner.emit({type:'agent_settled',aborted:false});
+ const active=()=>sm.getBranch().filter(e=>e.type==='custom_message'&&e.customType==='inner-loop-active');
+ await command('auto');assert.equal(core.getTuiState().autoSpeak,true);assert.equal(core.getTuiState().capture,true);assert.equal(calls,0);
+ await start('我在设计庭院花园，也想收集雨水。');await settle();await wait(()=>!core.episode);
+ assert.equal(active().length,1,'auto delivers without show/say');assert.equal(active()[0].details.mode,'auto');assert.equal(core.getTuiState().autoSpeak,true,'grant continues for new user material');
+ assert.equal(sdk.SessionManager.open(sm.getSessionFile()).getBranch().filter(e=>e.type==='custom_message'&&e.customType==='inner-loop-active').length,1);
+ const first=calls;await command('auto');assert.equal(calls,first,'re-enabling auto does not re-ask on unchanged material');await settle();assert.equal(calls,first);
+ await session.extensionRunner.emitBeforeAgentStart({messageType:'custom',message:{role:'custom',customType:'inner-loop-active',content:'self',display:true,timestamp:Date.now()}},session._baseSystemPromptOptions);await settle();assert.equal(calls,first);
+ await start('extension text must not become selected material','extension');await settle();assert.equal(calls,first);assert(!JSON.stringify(core.notes).includes('extension text'));
+ await start('我还想继续聊聊雨水和花园。');await session.extensionRunner.emitMessageEnd({type:'message_end',message:{role:'assistant',content:[],stopReason:'error',errorMessage:'synthetic provider failure',timestamp:Date.now()}});await settle();assert.equal(calls,first,'failed main reply never launches extra paid inference');
+ delay=true;await start('我想在露台种花，并且收集雨水。');await settle();await wait(()=>!!resolveCall);rawInput('\x1b[13;1:3u');assert(core.episode,'key release does not cancel the Enter-triggered work');
+ editor='new draft';resolveCall();await wait(()=>!core.episode);assert.equal(active().length,1,'final editor gate blocks late result');editor='';delay=false;
+ hold=true;await start('我还在考虑雨水储存容器的位置。');await settle();await wait(()=>!core.episode);assert.equal(active().length,1,'hold never sends');const held=calls;await settle();assert.equal(calls,held);
+ hold=false;delay=true;resolveCall=null;await start('新的花园想法：尽量利用雨水浇花。');await settle();await wait(()=>!!resolveCall);await command('off');resolveCall();await wait(()=>!core.episode);await new Promise(r=>setTimeout(r,0));assert.equal(active().length,1,'off invalidates pending auto delivery');
+ await session.reload();assert.equal(core.getTuiState().autoSpeak,false);assert.equal(core.mode,'off');
+ console.log('PASS: auto sends and persists without say; selected interactive input only; hold/self-output/duplicate settle/draft/off/reload gates; pre-TUI focus observer and key-release handling.');
+}finally{session?.dispose();await rm(root,{recursive:true,force:true})}

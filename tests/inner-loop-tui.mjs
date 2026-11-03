@@ -22,12 +22,13 @@ try{
  await session.bindExtensions({mode:'tui',uiContext:{notify(){},getEditorText:()=>editor,setStatus:(_key,text)=>statuses.push(text),onTerminalInput:fn=>{rawInput=fn;return ()=>{rawInput=null}}}});
  const command=async text=>session.prompt('/inner-loop '+text);
  assert.equal(core.mode,'off');assert.equal(calls,0);
- await command('auto');await command('add 我想收集雨水浇庭院花园。');await wait(()=>!core.episode);assert(core.getTuiState().prepared);assert.equal(sm.getBranch().filter(e=>e.type==='custom_message').length,0,'automatic shadow stays out of transcript');
+ await command('auto-shadow');await command('add 我想收集雨水浇庭院花园。');await wait(()=>!core.episode);assert(core.getTuiState().prepared);assert.equal(sm.getBranch().filter(e=>e.type==='custom_message').length,0,'automatic shadow stays out of transcript');
  await command('show');assert.equal(sm.getBranch().filter(e=>e.type==='custom_message').length,1);
  const count=calls;await session.extensionRunner.emit({type:'agent_settled',aborted:false});assert.equal(calls,count,'no event polling');
  await command('capture on');
  await session.extensionRunner.emitBeforeAgentStart({messageType:'custom',message:{role:'custom',customType:'inner-loop-approved',content:'self output',display:true,timestamp:Date.now()}},session._baseSystemPromptOptions);
  await session.extensionRunner.emit({type:'agent_settled',aborted:false});assert.equal(calls,count,'self output cannot ignite');
+ await session.extensionRunner.emitInput('我希望把雨水引到庭院花园里。',undefined,'interactive');
  await session.extensionRunner.emitBeforeAgentStart({messageType:'user',prompt:'我希望把雨水引到庭院花园里。'},session._baseSystemPromptOptions);
  await session.extensionRunner.emitMessageEnd({type:'message_end',message:{role:'assistant',content:[{type:'thinking',thinking:'PRIVATE THINKING MUST NOT ENTER NOTES'},{type:'text',text:'合成普通回复，仅用于重复检查。'}],timestamp:Date.now(),stopReason:'stop'}});
  assert(core.history.some(t=>t.includes('合成普通回复')));assert(!JSON.stringify(core.history).includes('PRIVATE THINKING'));
@@ -37,7 +38,7 @@ try{
  await command('say');assert.equal(sm.getBranch().filter(e=>e.type==='custom_message'&&e.customType==='inner-loop-approved').length,1);
  await command('shadow');await command('add 我想收集雨水浇庭院花园。');delay=true;await command('run');await wait(()=>!!resolveCall);rawInput('x');resolveCall();await new Promise(r=>setTimeout(r,0));assert.equal(core.result,null);assert.equal(core.getTuiState().prepared,null);
  editor='typing';const before=calls;await command('prepare');assert.equal(calls,before);editor='';
- await command('clear');await command('auto');resolveCall=null;
+ await command('clear');await command('auto-shadow');resolveCall=null;
  await command('add 我想收集雨水浇庭院花园。');await wait(()=>!!resolveCall);const firstResolve=resolveCall,firstCalls=calls;
  await command('add 我想减少浇花使用的自来水。');assert.equal(calls,firstCalls,'new explicit material waits for cancelled request to settle');
  resolveCall=null;firstResolve();await wait(()=>!!resolveCall);resolveCall();await wait(()=>!core.episode);

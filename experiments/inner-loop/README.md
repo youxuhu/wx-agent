@@ -1,73 +1,54 @@
-# Inner Loop：有界主动聊天实验
+# Inner Loop：从合成研究到独立对话助手
 
-当前完成：冻结的合成研究、离线复算、默认关闭的 TUI 手动/事件驱动 shadow，以及用户确认后的一条消息投递。
-范围：只实现和测试 TUI，不处理 GUI/Web。无人值守主动插话仍未启用；人工偏好评价尚未完成，量表未证明优于普通判断。
+当前用户入口是独立的 TUI 聊天 demo **Inner**。复用 Pi 框架，默认启动即可在自己的活动文件夹里探索、创作和主动说话；动态判断是否继续，没有固定三步或一条消息限制。只保留聊天与自主活动，详细使用、边界和费用见 [独立助手说明](../../assistants/inner/README.md)。
 
-## 使用 TUI shadow
-
-扩展位于 `extensions/inner-loop/`，由 Pi 正常加载；现有 TUI 可 `/reload` 后使用。Web/RPC 不开放此入口，不需要打包桌面端。
-
-```text
-/inner-loop status
-/inner-loop shadow
-/inner-loop add 我正在设计一个庭院花园。
-/inner-loop add 我想收集雨水来节约用水。
-/inner-loop run
-/inner-loop cancel
-/inner-loop off
+```sh
+pi-chat
 ```
 
-每张卡最多 400 字符、最多三张。`add` 的文字是本次显式授权材料，会发送给固定的 `deepseek/deepseek-flash`；不读取文件、聊天记录或剪贴板。`run` 每次手动启动，最多三步探索、一次普通判断；无材料、hold、非法输出或无进展即停，不重试。不支持 `active`，不会等待时间流逝后自行开口。
+当前独立助手使用 `assistants/inner/play-loop.mjs` 与 `playground.mjs`。下面旧 coding-agent 扩展的多模式命令仍保留兼容，**不是本 demo 的操作入口**。原冻结研究没有修改或重新付费执行。
 
-## TUI 事件驱动探索与自然表达
+## 可复用的 TUI 扩展
 
-```text
-/inner-loop auto
-/inner-loop add 我想让庭院花园少依赖自来水。
-# 新授权材料触发探索，但候选只留在内存，页脚提示可查看
-/inner-loop show
+`extensions/inner-loop/` 保留历史适配器及共用预算/注意力组件；旧 Pi TUI 扩展入口：
 
-# 可选：明确授权随后发送的短消息及普通回复片段
-/inner-loop capture on
-# 只在用户发起的普通对话真正 settled 后探索；自身输出不点火
-/inner-loop capture off
-```
+| 命令 | 当前语义 |
+| --- | --- |
+| `/inner-loop auto` | 自动探索并自行投递；明确选择此后短用户消息及普通回复片段 |
+| `/inner-loop auto cards` | 只用显式添加的话题卡自动探索并投递 |
+| `/inner-loop auto-shadow` | 事件驱动，但只保留候选供查看 |
+| `/inner-loop shadow` + `add 内容` + `run` | 原手动预览流程 |
+| `/inner-loop capture on/off` | 调整后续材料授权；off 后已有话题卡仍可按当前模式使用 |
+| `/inner-loop prepare` / `show` / `say` | 可选的准备、预览和确认发送；自动模式不依赖它们 |
+| `/inner-loop cancel` / `off` | 取消自动工作 / 关闭并清空话题授权 |
 
-`capture on` 使用开启之后的用户短消息（每条最多 400 字符、900 UTF-8 字节）和对应普通回复的前 200 字符来避免重复；不读取既往聊天、thinking 或工具结果。最多保留三张卡，过长消息跳过；请求若超过原始预算上界则停止。人工 `add` 的卡片合计最多 900 UTF-8 字节。材料不变时不靠重复 settled 事件再问模型。新材料到达时先取消旧请求，只保留最新一次事件，等旧请求结束后再处理，不并发抢占预算账本。
+默认仍 off。`auto` 仅作用于当前会话；切会话、树导航、重载会清空授权。Pi 1.4.0 会缓存 `.mjs`，**更新源码后须重开进程，不能保证仅 `/reload` 会加载新版辅助模块**。独立 `pi-chat` 每次启动新进程，推荐从这里使用。
 
-新表达规则在 `extensions/inner-loop/conversation.mjs`：跟随材料的语言、提出具体且有依据的联系，优先温和观察，避免复述、泛泛建议和强行提问；不虚构共同记忆、孤独感或需要用户回应的情绪。它是表达设计，不能当作用户已认可或心理需求的证据。冻结研究提示词未改动。
+新材料来自明确 `add` 或开启之后真正的交互输入，不扫描旧对话、文件、剪贴板或代码项目。每条最多 400 字符、900 UTF-8 字节，保留最近三张、合计不超过 900 字节；对应普通回复取前 200 字符用于重复检查，必要时按预算进一步缩短。长消息可以正常聊天，但旧扩展会跳过自动捕获。不读取 thinking 或工具结果。
 
-## 确认发送一条想法
+## 开口与停止
 
-```text
-/inner-loop prepare
-# 候选准备完成；可先用 show 查看
-/inner-loop say
-```
+事件启动有限探索（最多三步）→ 引用/schema 校验 → 普通开口判断 → 同步最终归属/输入/忙碌/队列检查 → 一条消息或停止。自己的 custom 消息和其他扩展伪装的 user 来源不构成合法新材料；相同事件/来源依据不反复尝试。
 
-`prepare`（别名 `once`）仅准备候选，不直接发言；`say` 是用户当前的明确发送操作，最多发送一条，之后关闭并清空话题授权。需要已有保存记录的会话、空闲 TUI、空编辑器且没有排队消息。候选经过取消、普通新输入、树导航、切会话或重载后失效；重复 say 不会重发。不触发主模型。
+`attention.mjs` 只观察终端焦点和鼠标转义序列，不记录按键内容，不轮询 OS。它在 fullscreen 消费序列前仍可收到标准输入事件；失焦/鼠标活动会取消旧结果，焦点回来不自动恢复。输入期间同样取消，并忽略 Enter 的键盘释放事件，避免刚启动的探索被同一次 Enter 的 release 误杀。没有焦点上报的终端仍无法保证检测切窗；不把它说成完整注意力测量。
 
-这样处理的原因是已核查 Pi 1.4.0：公开扩展接口没有可靠的终端窗口焦点/连接信号，fullscreen 的焦点与部分滚动事件会在扩展之前被 TUI 消费，不能用空编辑器冒充可靠注意力。自动工作保持 shadow，最终说话以当前 say 命令为准。发送后仅检查本次操作新追加的文件字节，确认 deliveryId 已落盘才报告保存成功；失败或不确定时停止，不自动重试。
+消息通过公开 `sendMessage(...,{triggerTurn:false})` 写入，不伪造用户 prompt，不触发主模型。检查本次追加字节中的 deliveryId 才报告落盘成功；未确认就停止，不自动重发。全新空会话须等首轮普通 assistant 消息保存后才允许自动投递，不写伪造消息绕过 SDK 首次刷盘限制。
 
-`shadow` 仅对当前会话生效。新输入、取消、会话切换、树导航、重载会使旧结果失效；切会话或重载恢复 off。仅在 TUI 空闲、编辑器为空、无排队输入时允许运行和发布。RPC 的注意力、writer lease 和连接语义未接入，直接拒绝。
+自然表达规则在 `conversation.mjs`：使用材料语言、具体且有依据的联系、温和推断，避免复述、泛泛建议和强行提问，不虚构记忆、私人思绪或情绪依赖。这是表达设计，不是已验证的心理状态或用户喜好。
 
-手动 `run` 或 `show` 通过 `sendMessage(..., {triggerTurn:false})` 保存明确标记的 shadow 预览，**不是一次主动投递成功**。预览会进入当前会话记录及后续模型上下文；自动 shadow 只保留内存候选及页脚状态。`say` 保存独立的 `inner-loop-approved` 消息，来源为 `user-approved-once`，不冒充用户输入。卡片和运行状态仅存内存；`clear`/`off` 清空它们，但不删除已存的消息。
+## 证据、预算和验证
 
-持久化限制：Pi 1.4.0 的全新空会话直到第一条 assistant 消息才首次刷盘。空会话中只有 shadow 预览时，不能保证崩溃后恢复；集成测试通过一条合成 assistant 记录触发首次刷盘，再重开验证预览。扩展不伪造真实 assistant 消息来绕过此限制。
-
-## 验证与预算
+原 48 场景研究源码和数据保持冻结，不能重跑 `simulate.mjs --execute`。原研究没有证明锚定测量优于普通判断；原 15 条候选的人工标签仍为空，没有由模型代填。
 
 ```sh
 python3 scripts/test.py
 node experiments/inner-loop/reproduce.mjs
+node tests/inner-assistant-terminal.mjs
+node tests/inner-assistant-terminal.mjs --regular
 ```
 
-默认测试不访问模型。`tests/inner-loop-integration.mjs` 验证 SDK 命令、消息组件、持久化和会话替换；`tests/inner-loop-tui.mjs` 验证事件/授权/自激禁止/输入取消/重载。额外用 `node tests/inner-loop-terminal.mjs` 驱动真实交互式 Pi TUI（PTY，默认 fullscreen，`--regular` 可测普通模式），验证准备、确认、落盘、重放拒绝和键入取消；使用本机已有的 node-pty，不接触 GUI。
+上述默认不访问模型。另有真实 TUI 自动投递两调用和独立助手真实普通对话一次调用验证，详见 [本轮报告](assistant-report.md)。无需重跑已经成功的付费 smoke test。
 
-真实 DeepSeek 的 TUI 两调用验证已完成。再次运行带 `--execute` 的终端测试会付费，不属于日常回归，不能为了复核已成功样例而重复运行。
+自动探索继续共用私有 `outputs/inner-loop-integration/budget.json`，继承原研究已花预算；调用前预留，未知 usage 保留，原上限 192 次 / 500,000 tokens / US$1 不重置。累计为 **119 次、50,434 tokens、保守 US$0.04668**，其中最新动态活动接入新增 36 次（包含失败尝试）。普通用户对话按独立助手所选模型正常计费，主动分支另计，不包含在主会话页脚费用里。
 
-固定研究的 `simulate.mjs --execute` **不要重跑**。冻结源码与证据保持原样。新接入账本在私有 `outputs/inner-loop-integration/budget.json`，继承原研究的 74 次调用及保守预留；发请求前落盘预留，用排他锁阻止并发，错误/未知 usage 不释放预留。锁因崩溃残留时停机人工核查，不自动解除。全局上限仍为 192 次、500,000 tokens、US$1，无自动重试。
-
-2026-11-03 累计：80 次、33,826 tokens、保守估计 US$0.0303072，剩余最多 112 次。包含本轮范围收敛前已发生的两次接入请求，未因撤回代码而清除费用。这里的金额是模型目录费率估计，不是账单。
-
-文件地图和历史边界见 [HANDOFF.md](HANDOFF.md)，研究结果与限制见 [report.md](report.md)。15 条候选的 [人工评价包](evidence/review.md) 尚未由用户打分，禁止模型代填。
+历史过程见 [HANDOFF.md](HANDOFF.md)、[冻结研究报告](report.md) 和 [上一阶段 TUI 报告](tui-v2-report.md)；关于“auto 还只预览、必须 say”的旧描述已被当前实现替代。GUI/Web 和定时器均不在本轮范围。
