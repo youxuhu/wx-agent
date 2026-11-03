@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {sdk} from './helpers.mjs';
+import {installTui} from '../extensions/inner-loop/tui.mjs';
+const root=await mkdtemp(join(tmpdir(),'inner-tui-sdk-'));
+let session,core,calls=0,editor='',rawInput,resolveCall,delay=false;
+const statuses=[];
+const wait=async f=>{for(let i=0;i<500;i++){if(f())return;await new Promise(r=>setTimeout(r,10))}throw Error('SDK TUI timeout')};
+try{
+ const settings=sdk.SettingsManager.inMemory({defaultTools:[]});
+ const loader=new sdk.DefaultResourceLoader({cwd:root,agentDir:root,settingsManager:settings,noContextFiles:true,noSkills:true,noPromptTemplates:true,disabledBuiltinExtensions:['mcp'],extensionFactories:[pi=>{core=installTui(pi,async(system,text)=>{
+  calls++;if(!system.includes('"action"'))return {decision:'speak',reason:'Specific connection'};
+  const notes=JSON.parse(text).memory.notes.slice(0,2);
+  const step={action:'connect',focus:notes.map(n=>n.id),candidate:{text:'雨水收集似乎能与庭院浇灌结合。',kind:'inference',refs:notes.map(n=>({id:n.id,quote:n.text.slice(0,20)}))},next:null};
+  if(delay)return new Promise(resolve=>{resolveCall=()=>resolve(step)});return step;
+ })}]});await loader.reload();assert.deepEqual(loader.getExtensions().errors,[]);
+ const sm=sdk.SessionManager.create(root,join(root,'sessions'));
+ sm.appendMessage({role:'assistant',content:[{type:'text',text:'Synthetic existing conversation.'}],api:'openai-completions',provider:'deepseek',model:'deepseek-flash',stopReason:'stop',timestamp:Date.now(),usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}});
+ ({session}=await sdk.createAgentSession({cwd:root,agentDir:root,settingsManager:settings,resourceLoader:loader,sessionManager:sm,tools:[]}));
+ await session.bindExtensions({mode:'tui',uiContext:{notify(){},getEditorText:()=>editor,setStatus:(_key,text)=>statuses.push(text),onTerminalInput:fn=>{rawInput=fn;return ()=>{rawInput=null}}}});
+ const command=async text=>session.prompt('/inner-loop '+text);
+ assert.equal(core.mode,'off');assert.equal(calls,0);
+ await command('auto');await command('add 我想收集雨水浇庭院花园。');await wait(()=>!core.episode);assert(core.getTuiState().prepared);assert.equal(sm.getBranch().filter(e=>e.type==='custom_message').length,0,'automatic shadow stays out of transcript');
+ await command('show');assert.equal(sm.getBranch().filter(e=>e.type==='custom_message').length,1);
+ const count=calls;await session.extensionRunner.emit({type:'agent_settled',aborted:false});assert.equal(calls,count,'no event polling');
+ await command('capture on');
+ await session.extensionRunner.emitBeforeAgentStart({messageType:'custom',message:{role:'custom',customType:'inner-loop-approved',content:'self output',display:true,timestamp:Date.now()}},session._baseSystemPromptOptions);
+ await session.extensionRunner.emit({type:'agent_settled',aborted:false});assert.equal(calls,count,'self output cannot ignite');
+ await session.extensionRunner.emitBeforeAgentStart({messageType:'user',prompt:'我希望把雨水引到庭院花园里。'},session._baseSystemPromptOptions);
+ await session.extensionRunner.emitMessageEnd({type:'message_end',message:{role:'assistant',content:[{type:'thinking',thinking:'PRIVATE THINKING MUST NOT ENTER NOTES'},{type:'text',text:'合成普通回复，仅用于重复检查。'}],timestamp:Date.now(),stopReason:'stop'}});
+ assert(core.history.some(t=>t.includes('合成普通回复')));assert(!JSON.stringify(core.history).includes('PRIVATE THINKING'));
+ await session.extensionRunner.emit({type:'agent_settled',aborted:false});await wait(()=>!core.episode);assert(calls>count);
+ const after=calls;await session.extensionRunner.emit({type:'agent_settled',aborted:false});assert.equal(calls,after);
+ await command('say');assert.equal(core.mode,'off');assert.equal(sdk.SessionManager.open(sm.getSessionFile()).getBranch().filter(e=>e.type==='custom_message'&&e.customType==='inner-loop-approved').length,1);
+ await command('say');assert.equal(sm.getBranch().filter(e=>e.type==='custom_message'&&e.customType==='inner-loop-approved').length,1);
+ await command('shadow');await command('add 我想收集雨水浇庭院花园。');delay=true;await command('run');await wait(()=>!!resolveCall);rawInput('x');resolveCall();await new Promise(r=>setTimeout(r,0));assert.equal(core.result,null);assert.equal(core.getTuiState().prepared,null);
+ editor='typing';const before=calls;await command('prepare');assert.equal(calls,before);editor='';
+ await command('clear');await command('auto');resolveCall=null;
+ await command('add 我想收集雨水浇庭院花园。');await wait(()=>!!resolveCall);const firstResolve=resolveCall,firstCalls=calls;
+ await command('add 我想减少浇花使用的自来水。');assert.equal(calls,firstCalls,'new explicit material waits for cancelled request to settle');
+ resolveCall=null;firstResolve();await wait(()=>!!resolveCall);resolveCall();await wait(()=>!core.episode);
+ await session.reload();assert.equal(core.mode,'off');assert.equal(core.notes.length,0);
+ console.log('PASS: real SDK TUI event-driven shadow, explicit future-material grant, no self-ignition/repeat polling, approved persistent send, raw typing cancellation and reload reset.');
+}finally{session?.dispose();await rm(root,{recursive:true,force:true})}

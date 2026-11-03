@@ -1,5 +1,9 @@
 # Codex 交接：Inner Loop 主动聊天探索原型
 
+## 最新范围与 TUI 第二阶段
+
+用户明确要求只处理 TUI，不处理 GUI；本轮 Web 改动和构建产物已撤回。当前新增事件驱动 shadow、显式后续材料授权、自然表达规则及 prepare/show/say 的用户确认一次发送；TUI 注意力信号不足时不启用无人确认 active。真实交互式终端 regular/fullscreen 与真实模型两调用验证已完成。累计账本 80 次、33,826 tokens、保守 US$0.0303072；不清除撤回代码前的请求费用。详见 [tui-v2-report.md](tui-v2-report.md) 及更新后的 README。下面是先前阶段记录，以此段为准。
+
 ## 2026-11-03 Codex 接手后状态（优先于下方原始快照）
 
 - 已新增 `extensions/inner-loop/`：默认 off，TUI `/inner-loop shadow / add / run / cancel / clear / off / status`，只用显式卡片，手动 shadow，无 active 或 Web 接入。
