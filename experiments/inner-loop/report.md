@@ -28,6 +28,8 @@
 
 另用真实 DeepSeek 做一次新增端到端测试：两次调用（生成 + 普通判断），结果 wouldSpeak=true，候选为“Rainwater collection could support the courtyard garden plan.”。预览保存并重开验证成功，主会话模型调用为零。取消与切会话的竞态用离线可控请求验证，没有为这两种竞态额外付费。这是一个真实接入样例，不能替代人工体验评价或线上安全证明。
 
+持久化测试边界：SDK 对全新空会话须等第一条 assistant 消息才首次刷盘，测试额外追加一条合成 assistant 记录后才重开 JSONL。仅有 shadow 的空会话尚无崩溃持久化保证；生产扩展不追加伪造的 assistant 消息，也不声称具有 active 投递事务。
+
 验证发现并修正：会话替换会使捕获的旧 ctx 失效，迟到请求的错误处理也不能访问它；现在 epoch 失效后连旧上下文通知都不发布。
 
 最终验证：全量 `scripts/test.py` 通过；固定版本 TypeScript Language Server 检查研究与接入共 13 个模块，均为零诊断；生产扩展经真实资源加载器成功注册命令；公开证据离线复算一致，冻结源码 hash 一致，公开 run 未包含凭据、reasoning 或 provider response ID 字段。私有验证日志保留在 `outputs/inner-loop-integration/`，不入库。

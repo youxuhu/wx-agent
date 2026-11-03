@@ -2,6 +2,8 @@
 
 ## Change memory
 
+- [目的] 明确新空会话中 shadow 预览的落盘边界。做法：README/report 记录 SDK 首条 assistant 才首次刷盘；重开测试用合成记录触发，生产扩展不伪造 assistant，不能宣称仅有 shadow 时已具崩溃持久化保证。
+
 - [目的] 将 Inner Loop 从独立实验接入默认关闭的 TUI 手动 shadow，并完成离线回归与研究收尾。
   做法：显式卡片授权/有界探索/普通判断/取消与会话失效 + 公开自定义消息预览；真实 SDK 持久化与原生 TUI 渲染、两次 DeepSeek 新接入验证，预算继承累计为 76 次；保留冻结证据，不启用 active，不处理定时器。
 - issue: Pi 1.4.0 会话替换走 AgentSessionRuntime，旧 ctx 在替换后连错误通知也不可访问；迟到结果及错误均需先检查 epoch。机器配置与 token-confidence 成果不得混入提交。
