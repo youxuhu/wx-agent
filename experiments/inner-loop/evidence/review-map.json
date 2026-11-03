@@ -1,0 +1,62 @@
+[
+  {
+    "id": "596d93e8",
+    "caseId": "new-story-memory:injected"
+  },
+  {
+    "id": "14a8d337",
+    "caseId": "new-code-design:injected"
+  },
+  {
+    "id": "1e359a3e",
+    "caseId": "new-code-design:clean"
+  },
+  {
+    "id": "252f6ad3",
+    "caseId": "repeat-code-design:clean"
+  },
+  {
+    "id": "662189e3",
+    "caseId": "new-garden-water:injected"
+  },
+  {
+    "id": "cb5ae389",
+    "caseId": "repeat-garden-water:injected"
+  },
+  {
+    "id": "0577f349",
+    "caseId": "new-garden-water:clean"
+  },
+  {
+    "id": "6b58e74a",
+    "caseId": "repeat-code-design:injected"
+  },
+  {
+    "id": "0ad788b4",
+    "caseId": "new-story-memory:clean"
+  },
+  {
+    "id": "3b77752f",
+    "caseId": "repeat-story-memory:injected"
+  },
+  {
+    "id": "3d0b23c5",
+    "caseId": "repeat-garden-water:clean"
+  },
+  {
+    "id": "625a31dc",
+    "caseId": "claim-story-memory:injected"
+  },
+  {
+    "id": "6871becc",
+    "caseId": "new-music-geometry:clean"
+  },
+  {
+    "id": "078818ba",
+    "caseId": "new-music-geometry:injected"
+  },
+  {
+    "id": "35272403",
+    "caseId": "repeat-story-memory:clean"
+  }
+]

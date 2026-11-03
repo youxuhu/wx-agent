@@ -1,0 +1,208 @@
+{
+  "scope": "synthetic shadow replay, NOT real chat or human-preference validation",
+  "freezeHash": "0f59dfc7634e588ddc89589f4ace745b6a3c0f7ff36fd278603f8ad0e79af62d",
+  "rows": 48,
+  "policies": {
+    "rule": {
+      "cases": 48,
+      "wouldSpeak": 8,
+      "modelJudgments": 0,
+      "invalidDecisions": 0,
+      "byCategory": {
+        "fresh": {
+          "cases": 8,
+          "wouldSpeak": 5
+        },
+        "repeat": {
+          "cases": 8,
+          "wouldSpeak": 3
+        },
+        "unsupported": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "low-value": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "busy": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "no-material": {
+          "cases": 8,
+          "wouldSpeak": 0
+        }
+      },
+      "byCondition": {
+        "clean": {
+          "cases": 24,
+          "wouldSpeak": 7
+        },
+        "injected": {
+          "cases": 24,
+          "wouldSpeak": 1
+        }
+      }
+    },
+    "plain": {
+      "cases": 48,
+      "wouldSpeak": 4,
+      "modelJudgments": 9,
+      "invalidDecisions": 0,
+      "byCategory": {
+        "fresh": {
+          "cases": 8,
+          "wouldSpeak": 4
+        },
+        "repeat": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "unsupported": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "low-value": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "busy": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "no-material": {
+          "cases": 8,
+          "wouldSpeak": 0
+        }
+      },
+      "byCondition": {
+        "clean": {
+          "cases": 24,
+          "wouldSpeak": 4
+        },
+        "injected": {
+          "cases": 24,
+          "wouldSpeak": 0
+        }
+      }
+    },
+    "anchored": {
+      "cases": 48,
+      "wouldSpeak": 4,
+      "modelJudgments": 9,
+      "invalidDecisions": 4,
+      "byCategory": {
+        "fresh": {
+          "cases": 8,
+          "wouldSpeak": 4
+        },
+        "repeat": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "unsupported": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "low-value": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "busy": {
+          "cases": 8,
+          "wouldSpeak": 0
+        },
+        "no-material": {
+          "cases": 8,
+          "wouldSpeak": 0
+        }
+      },
+      "byCondition": {
+        "clean": {
+          "cases": 24,
+          "wouldSpeak": 4
+        },
+        "injected": {
+          "cases": 24,
+          "wouldSpeak": 0
+        }
+      }
+    }
+  },
+  "modelCandidates": 15,
+  "injections": {
+    "wrong-source": {
+      "assigned": 4,
+      "exercised": 2
+    },
+    "stale": {
+      "assigned": 4,
+      "exercised": 2
+    },
+    "malicious-note": {
+      "assigned": 4,
+      "exercised": 4
+    },
+    "duplicate": {
+      "assigned": 4,
+      "exercised": 1
+    },
+    "revoke": {
+      "assigned": 4,
+      "exercised": 1
+    },
+    "switch-session": {
+      "assigned": 4,
+      "exercised": 1
+    }
+  },
+  "simulatedHardGateViolations": [],
+  "realDeliveries": 0,
+  "robustness": {
+    "repeat": {
+      "n": 5,
+      "valid": 4,
+      "decisionAgreement": 1,
+      "meanScoreL1": 0.5,
+      "scoreDistanceWarning": "unknown pairs excluded from distance, not treated as measured zeros"
+    },
+    "reverse": {
+      "n": 5,
+      "valid": 5,
+      "decisionAgreement": 0.6,
+      "meanScoreL1": 3,
+      "scoreDistanceWarning": "unknown pairs excluded from distance, not treated as measured zeros"
+    }
+  },
+  "pairedDecisions": {
+    "n": 9,
+    "different": 1,
+    "anchorSelfContradictions": 1
+  },
+  "extraExploration": {
+    "attempts": 8,
+    "accepted": 5,
+    "candidateProduced": 5,
+    "warning": "Conditional on generator requesting another step; no extra expression assessment, no causal/human usefulness estimate"
+  },
+  "requests": 74,
+  "tokens": {
+    "input": 23435,
+    "output": 4452,
+    "cached": 5885
+  },
+  "estimatedUsd": 0.01064271,
+  "conservativeBudget": {
+    "calls": 74,
+    "tokens": 31922,
+    "usd": 0.02854919999999999
+  },
+  "humanOutcome": {
+    "acceptance": null,
+    "intrusiveness": null,
+    "usefulness": null,
+    "reason": "No human labels yet; model scores are not user preferences"
+  },
+  "conclusion": "Mechanism and boundaries only. Keep active delivery off; assess anonymized candidates before P3."
+}

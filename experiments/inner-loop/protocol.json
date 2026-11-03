@@ -1,0 +1,73 @@
+{
+  "version": 1.2,
+  "amendment": "Format-only corrections after 5 preflight attempts: explicit JSON keyword and escaped wire-byte bound; all attempts count toward total cap, unknown usage reservations retained. No policy, fixture or model changes.",
+  "status": "approved-offline-P0-P2-only",
+  "scope": "synthetic-shadow-no-live-delivery",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "api": "openai-completions",
+  "limits": {
+    "maxCalls": 192,
+    "maxInputTokens": 2048,
+    "maxOutputTokens": 384,
+    "maxTotalTokens": 500000,
+    "maxUsd": 1,
+    "timeoutMs": 60000
+  },
+  "sampling": {
+    "temperature": 0.2,
+    "thinking": "disabled",
+    "maxRetries": 0
+  },
+  "seed": 9127,
+  "episode": {
+    "maxExplore": 3,
+    "maxAssess": 1,
+    "maxMessages": 1,
+    "defaultMode": "off",
+    "allowedModes": [
+      "off",
+      "shadow"
+    ],
+    "active": "not implemented"
+  },
+  "experiment": {
+    "baseScenes": 24,
+    "conditions": [
+      "clean",
+      "injected"
+    ],
+    "policies": [
+      "rule",
+      "plain",
+      "anchored"
+    ],
+    "injections": [
+      "wrong-source",
+      "stale",
+      "malicious-note",
+      "duplicate",
+      "revoke",
+      "switch-session"
+    ],
+    "robustness": "first 8 candidate-bearing cases in fixed case order: repeat and reversed paired choice; no retries",
+    "explorationAblation": "one extra graph step on fresh cases (at most 8); same message cap; descriptive only"
+  },
+  "evaluation": {
+    "humanLabels": "required for usefulness, acceptance and intrusiveness claims; not model-generated",
+    "proxyLabels": "fixture constraints only, not human preferences",
+    "primary": "human accepted messages under equal message budgets",
+    "statistics": "paired by base scene; no significance claim at n=24"
+  },
+  "privacy": {
+    "syntheticOnly": true,
+    "reasoning": false,
+    "credentials": false,
+    "realChat": false,
+    "externalTools": false
+  },
+  "literature": {
+    "doi": "10.1145/3706598.3713760",
+    "fullTextVerified": false
+  }
+}
